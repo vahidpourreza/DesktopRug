@@ -6,9 +6,7 @@ namespace DesktopRug.App;
 
 public partial class App : Application
 {
-    private Mutex? _instance;
-    private EventWaitHandle? _showSignal;
-    private RegisteredWaitHandle? _signalRegistration;
+    private SingleInstanceService? _singleInstance;
     private RugController? _controller;
     private AppLog? _log;
 
@@ -28,33 +26,34 @@ public partial class App : Application
             string output = e.Args.Length > index + 1 ? Path.GetFullPath(e.Args[index + 1]) : Path.Combine(directory, "diagnostics");
             int code = await Diagnostics.RunAsync(output); Shutdown(code); return;
         }
-        _instance = new(true, @"Local\DesktopRug.Instance", out bool first);
-        if (!first)
-        {
-            try { using var signal = EventWaitHandle.OpenExisting(@"Local\DesktopRug.Show"); signal.Set(); }
-            catch (WaitHandleCannotBeOpenedException) { }
-            _instance.Dispose(); _instance = null; Shutdown(); return;
-        }
         try
         {
+            _singleInstance = new(action =>
+            {
+                if (!Dispatcher.HasShutdownStarted) Dispatcher.BeginInvoke(action);
+            }, () => _controller?.ShowRug());
+            if (!_singleInstance.IsPrimary)
+            {
+                _singleInstance.SignalExisting();
+                _singleInstance.Dispose(); _singleInstance = null;
+                Shutdown(); return;
+            }
             var store = new SettingsService(directory); var settings = await store.LoadAsync();
             if (store.Diagnostic is { } diagnostic) _log.Write("warning", "settings-recovered", diagnostic);
             _controller = new(settings, store, _log);
-            _showSignal = new(false, EventResetMode.AutoReset, @"Local\DesktopRug.Show");
-            _signalRegistration = ThreadPool.RegisterWaitForSingleObject(_showSignal,
-                (_, _) => Dispatcher.BeginInvoke(() => _controller?.ShowRug()), null, Timeout.Infinite, false);
         }
         catch (Exception exception)
         {
-            _log.Write("error", "startup-failed", exception.GetType().Name + ": " + exception.Message);
+            _log.Write("error", "startup-failed", exception.GetType().Name);
             MessageBox.Show("Desktop Rug could not start. Details are in LocalAppData\\DesktopRug\\desktop-rug.log. Your desktop has not been changed.", "Desktop Rug", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(1);
         }
     }
     protected override void OnExit(ExitEventArgs e)
     {
-        _signalRegistration?.Unregister(null); _showSignal?.Dispose(); _controller?.Dispose();
-        if (_instance is not null) { _instance.ReleaseMutex(); _instance.Dispose(); }
-        base.OnExit(e);
+        // Retain ownership until the old tray and overlay are gone, so a concurrent relaunch
+        // cannot create a second visible instance during teardown.
+        try { _controller?.Dispose(); }
+        finally { _singleInstance?.Dispose(); base.OnExit(e); }
     }
 }

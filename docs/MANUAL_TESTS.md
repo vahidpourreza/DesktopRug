@@ -17,8 +17,10 @@ These are **not executed** unless a dated result is added. They require an inter
 - [ ] Drag center, edges and all four corners; perform rapid movement, long holds, release outside the rug and across the screen edge.
 - [ ] Corners lift, wrinkles form and the fabric settles without visible explosions or stuck capture.
 - [ ] Right-click Peek, timer restore, second Peek command, emergency hide during Peek and real desktop double-click activation all work.
-- [ ] Double-click compact state and back; scroll rotation; tray flatten, restore and all four sizes.
-- [ ] An application gaining focus mid-drag cancels the drag and hides both windows.
+- [ ] Double-click roll and unroll; grab a rolled rug; scroll rotation; tray flatten, restore, four sizes and scale adjustment.
+- [ ] An application gaining focus stays above the rug; exposed desktop retains it and a covering opaque application pauses animation.
+- [ ] Configure timed, toggle and hold Peek; change its shortcut; test conflict rollback and optional right-click activation.
+- [ ] Touch/pen drag, corner pressure, additional-pointer rejection, cancellation, barrel Peek and promoted-mouse suppression on real devices.
 - [ ] Verify table-top lighting, weave, fringe and shadow at 100%, 125%, 150% and 200% scaling.
 
 ## Shell and displays
@@ -26,7 +28,7 @@ These are **not executed** unless a dated result is added. They require an inter
 - [ ] Windows 10 with Explorer; Windows 11 with Explorer.
 - [ ] Desktop icons enabled, disabled, rearranged, resized and dragged during Peek. Bumps refresh without moving icons.
 - [ ] Restart Explorer intentionally. Tray returns, discovery recovers, and icon tracking diagnostics are accurate.
-- [ ] Two or more monitors, one with negative X/Y origin, mixed DPI; choose each in settings.
+- [ ] Two or more monitors, one with negative X/Y origin, mixed DPI; drag continuously across boundaries and verify size/position continuity and persistence.
 - [ ] Disconnect the saved monitor; change resolution, scale and primary display; rug stays recoverable.
 - [ ] Full-screen app, Win+D twice, Task View and virtual desktop switches.
 - [ ] Lock/unlock, suspend/resume and remote-session disconnect/reconnect; animation stops and recovers.

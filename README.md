@@ -4,32 +4,34 @@ A native Windows rug that you can drag, lift and fold over your **real desktop i
 
 ![A folded procedural Persian rug](docs/media/fold.png)
 
-**Preview build — Windows 10/11, x64.** Release compilation, automated physics tests and off-screen Windows checks pass. Hands-on desktop interaction, Windows 11, and mixed-DPI multi-monitor scenarios still need manual verification. See [validation](docs/VALIDATION.md).
+**0.2 preview — Windows 10/11, x64.** Includes persistent desktop layering, continuous cross-monitor cloth, customizable Peek, animated rolling, touch/pen handling and stronger fold contacts. Automated/native off-screen checks pass. Physical Windows 11, mixed-DPI hardware, touch/pen devices and disruptive shell/session checks still need verification. See [requirement coverage](docs/REQUIREMENTS.md) and [validation](docs/VALIDATION.md).
 
 ## Use it
 
-Launch `DesktopRug.exe`, then visit your desktop with **Win+D**. The rug appears when the desktop has focus; it rests while you work in another app. Look for the little rug in the notification area (including the hidden-icons overflow).
+Launch `DesktopRug.exe`, then visit your desktop with **Win+D**. The rug stays above desktop icons and below ordinary application windows, including exposed desktop areas while another app is active. It sleeps when settled or fully covered. Look for the little rug in the notification area (including the hidden-icons overflow).
 
 | Gesture | Action |
 | --- | --- |
-| Drag the middle | Move the rug with a little fabric inertia |
+| Drag the middle | Move the rug across displays with fabric inertia |
 | Pull a corner | Lift and fold the fabric |
 | Release | Let it settle |
 | Right-click | Peek: hide the rug for eight seconds |
 | Mouse wheel | Rotate five degrees |
-| Double-click | Toggle a compact strip |
+| Double-click | Roll / unroll the rug |
 | **Ctrl+Alt+Esc** | **Emergency hide** |
 | Ctrl+Alt+R | Show / hide |
-| Ctrl+Alt+P | Start / end Peek |
+| Ctrl+Alt+P (customizable) | Activate Peek |
 | Tray menu | Flatten, resize, pattern, settings, exit |
 
-Peek hides both the rendering and input windows so the real desktop receives clicks directly. Change its duration in settings. **Hide rug** remains hidden until explicitly shown again. If the emergency shortcut cannot be registered, the rug stays hidden and settings explain the conflict.
+Peek hides every rendering and input surface so the real desktop receives clicks directly. Choose timed, toggle, or hold-the-shortcut activation, a custom chord, and optional right-click activation in settings. For hold mode, the tray and right-click use timed Peek so they remain usable without a held key. Rebinding a conflicting shortcut preserves the previous binding. **Hide rug** remains hidden until explicitly shown again. If the emergency shortcut cannot be registered, the rug stays hidden and settings explain the conflict.
 
-Settings include Kashan-inspired, Tabriz-inspired and modern original procedural designs, four sizes, rotation, lighting, shadow, weave detail, a monitor selector and an optional local image. Custom images are fitted without cropping or overwriting the source. Synthetic fabric sounds are off by default. Economy quality uses a smaller grid and a 30 Hz display timer; Balanced and High target 60 Hz when hardware allows.
+Settings include three original procedural designs, four sizes plus a scale adjustment, rotation, lighting, shadow, weave detail, an initial monitor and an optional local image. Custom images are fitted without cropping or overwriting the source. Mouse, touch and pen use the same cloth gestures; pen pressure can control corner lift. Synthetic fabric sounds vary subtly and are off by default. Economy uses a smaller grid and a 30 Hz target; Balanced and High use a composition-driven 60 Hz target when hardware allows.
 
 | Kashan | Tabriz | Modern |
 | --- | --- | --- |
 | ![Kashan rug](docs/media/kashan.png) | ![Tabriz rug](docs/media/tabriz.png) | ![Modern rug](docs/media/modern.png) |
+
+![The rug rolled up without shrinking its material](docs/media/roll.png)
 
 ## Build and run
 
@@ -66,11 +68,13 @@ Keep any accompanying notice files with the executable. Native runtime libraries
 An unobtrusive smoke test creates windows outside the display, inspects the real shell read-only, renders pattern/fold/settings images and writes a local report:
 
 ```powershell
-.artifacts\publish\win-x64\DesktopRug.exe --diagnostics .\artifacts\diagnostics
+& 'artifacts/publish/win-x64/DesktopRug.exe' --diagnostics artifacts/diagnostics
 ```
 
-It does **not** move your pointer, activate an app, restart Explorer, alter a display, test real icon activation, or prove end-to-end desktop behavior. Do not treat it as the manual checklist.
+It checks real shell discovery, actual native hit testing and mouse-message handling in owned off-screen fixtures, shared 100%/150% coordinate views, singleton kernel objects, persistence failures, rendering parity and performance. It does **not** move your pointer, activate an app, restart Explorer, alter a physical display or exercise real desktop icon activation. Simulated touch/pen and monitor views are identified separately from hardware evidence.
 
-One rug belongs to one monitor. Choose a different monitor in settings; continuous dragging across monitors is not implemented. Compact mode is a short strip, not a physically simulated roll. Particle self-contact reduces fold intersections but is not a full triangle collision solver. Icon updates are polled and may lag a drag. The CPU renderer has a 60 Hz target, not a verified 60 FPS guarantee.
+One cloth simulation is rendered through a separate window pair on each monitor. Dragging across a mixed-DPI boundary preserves physical screen position and size; the scale preference records the result for relaunch. Explorer notifications trigger icon updates, with a fast 50 ms drag refresh and an idle fallback. Explorer can still delay exposing a dragged item's position until drop.
+
+Roll/unroll is an animated material-preserving guide, with free cloth physics resuming when grabbed. Swept vertex/triangle contacts substantially reduce fold penetration; pathological edge–edge crossings are not mathematically eliminated. Performance reports distinguish CPU raster timing from WPF/native pipeline timing and from physical display presentation. Installer work remains deferred until the manual acceptance checks are completed.
 
 See [architecture](docs/ARCHITECTURE.md), [Windows integration](docs/WINDOWS_INTEGRATION.md), [manual checks](docs/MANUAL_TESTS.md), and [validation evidence](docs/VALIDATION.md).

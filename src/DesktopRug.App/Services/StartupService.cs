@@ -8,7 +8,8 @@ internal static class StartupService
     internal static bool IsEnabled()
     {
         using var key = Registry.CurrentUser.OpenSubKey(Key);
-        return key?.GetValue("DesktopRug") is string;
+        return key?.GetValue("DesktopRug") is string command && Environment.ProcessPath is { } path
+            && string.Equals(command.Trim(), CommandFor(path), StringComparison.OrdinalIgnoreCase);
     }
     internal static void SetEnabled(bool enabled)
     {
@@ -16,8 +17,9 @@ internal static class StartupService
         if (enabled)
         {
             string path = Environment.ProcessPath ?? throw new InvalidOperationException("Cannot locate the application executable.");
-            key.SetValue("DesktopRug", $"\"{path}\" --background");
+            key.SetValue("DesktopRug", CommandFor(path));
         }
         else key.DeleteValue("DesktopRug", false);
     }
+    internal static string CommandFor(string path) => $"\"{path}\" --background";
 }

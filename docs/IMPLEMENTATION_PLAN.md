@@ -12,6 +12,6 @@
 - An always-topmost window would cover apps. Keep ordinary non-activating windows adjacent to the desktop host and gate visibility on the desktop being foreground.
 - Transparent input must work across process boundaries. Separate a click-through visual window from a nearly transparent native input window, whose region is the union of the actual projected triangles. Peek hides both.
 - Do not test by taking over the user's mouse, restarting Explorer, changing display settings, or showing a foreground window. Automated checks use off-screen windows and real read-only shell discovery; manual interaction remains explicitly unverified.
-- One rug belongs to one monitor. Moving it to another display is explicit; continuous cross-monitor cloth is deferred.
+- A shared world now drives separate window pairs on every monitor. Crossing/rebasing is verified in native off-screen fixtures; physical mixed-DPI hardware acceptance remains open.
 
-Status: all six milestone feature areas are implemented in a runnable preview. Release builds, automated tests, rendering checks and off-screen native integration are verified. Hands-on desktop validation remains pending, so the milestones and initial-release definition of done are not labeled fully complete. See VALIDATION.md and MANUAL_TESTS.md.
+Status: the 0.2 implementation closes the previous desktop-layer, cross-monitor, Peek preference, contact, roll, touch/pen, and performance gaps. Core tests, real-shell observation, native off-screen input/occlusion fixtures, singleton objects, and rendering/pipeline checks provide distinct evidence. Hands-on physical validation remains pending; the original release acceptance gate is not labeled complete. See REQUIREMENTS.md, VALIDATION.md and MANUAL_TESTS.md.

@@ -112,6 +112,14 @@ internal static class Diagnostics
             for (int i = 0; i < 1800; i++) cloth.Step();
             results["clothSettles"] = cloth.IsSleeping;
             results["finiteParticles"] = cloth.Particles.All(p => float.IsFinite(p.Position.X + p.Position.Y + p.Position.Z));
+            cloth.Reset(new(500, 380), new(700, 490), -5);
+            cloth.SetRolled(true);
+            for (int i = 0; i < 100; i++) cloth.Step();
+            results["rollAnimationCompletes"] = cloth.IsRolled && !cloth.IsRolling;
+            Render(renderer, Path.Combine(output, "Roll.png"));
+            cloth.SetRolled(false);
+            for (int i = 0; i < 100; i++) cloth.Step();
+            results["unrollAnimationCompletes"] = !cloth.IsRolled && !cloth.IsRolling;
             using (var bitmap = new SKBitmap(1000, 760))
             using (var canvas = new SKCanvas(bitmap))
             {
@@ -144,6 +152,14 @@ internal static class Diagnostics
                     target.Render(content);
                     var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(target));
                     using var settingsImage = File.Create(Path.Combine(output, "Settings.png")); encoder.Save(settingsImage);
+                    if (settingsWindow.FindName("PreferencesScroll") is System.Windows.Controls.ScrollViewer preferences)
+                    {
+                        preferences.ScrollToEnd(); settingsWindow.UpdateLayout(); await Task.Delay(30);
+                        var lower = new RenderTargetBitmap(610, 760, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+                        lower.Render(content);
+                        var lowerEncoder = new PngBitmapEncoder(); lowerEncoder.Frames.Add(BitmapFrame.Create(lower));
+                        using var lowerImage = File.Create(Path.Combine(output, "Settings-peek.png")); lowerEncoder.Save(lowerImage);
+                    }
                     results["settingsUiCreated"] = true;
                 }
                 finally { settingsWindow.Close(); }
@@ -151,13 +167,32 @@ internal static class Diagnostics
                 controller.ShowRug(); results["controllerShow"] = controller.RugRequested;
                 controller.Peek(); results["controllerPeek"] = controller.PeekActive;
                 controller.Peek(); results["controllerEndPeek"] = !controller.PeekActive;
-                results["controllerSettingsChange"] = controller.ApplySettings(controller.Settings with { Size = RugSize.Small, Pattern = RugPattern.Tabriz });
+                results["controllerSettingsChange"] = await controller.ApplySettingsAsync(controller.Settings with { Size = RugSize.Small, Pattern = RugPattern.Tabriz });
                 controller.Rotate(10); controller.Flatten(); controller.HideRug();
             }
+            string blockedSettings = Path.Combine(output, "blocked-settings-location");
+            await File.WriteAllTextAsync(blockedSettings, "Diagnostic fixture: this file deliberately prevents creating a settings directory.");
+            using (var controller = new RugController(new(), new SettingsService(blockedSettings), new AppLog(output), suppressPresentation: true))
+            {
+                var before = controller.Settings;
+                bool applied = await controller.ApplySettingsAsync(before with { Pattern = RugPattern.Modern });
+                results["failedSettingsSavePreservesPreferences"] = !applied && controller.Settings == before && !controller.IsApplying;
+                results["failedSettingsSaveHasDiagnostic"] = controller.Diagnostic.Contains("could not", StringComparison.OrdinalIgnoreCase);
+            }
+            var nativeChecks = await NativeInteractionDiagnostics.RunAsync(Path.Combine(output, "native-interactions"));
+            results["nativeInteractions"] = nativeChecks;
+            results["nativeInteractionsPassed"] = nativeChecks["nativeInteractionChecksPassed"];
+            var instanceCheck = await SingleInstanceService.DiagnoseAsync();
+            results["singleInstance"] = instanceCheck; results["singleInstancePassed"] = instanceCheck.Passed;
+            var performance = RenderPerformanceDiagnostics.Run(Path.Combine(output, "render-performance"));
+            results["renderPerformance"] = performance; results["renderChecksPassed"] = performance["renderChecksPassed"];
+            var framePipeline = await FramePipelineDiagnostics.RunAsync();
+            results["framePipeline"] = framePipeline; results["framePipelineExecuted"] = framePipeline["pipelineExecuted"];
             results["foregroundUnchangedDuringCheck"] = Native.GetForegroundWindow() == foreground;
             results["noAppWindowActivated"] = !focusMonitor.AppWasActivated;
             results["manualInteractionVerified"] = false;
-            bool passed = new[] { "visualCreated", "inputCreated", "inputShown", "inputLayerAlpha", "inputNonActivating", "visualClickThrough", "visualNonActivating", "wpfRugHasPixels", "wpfOutsideTransparent", "regionApplied", "regionInside", "regionOutsideExcluded", "peekHidesBoth", "finiteParticles", "noAppWindowActivated", "settingsUiCreated", "controllerHide", "controllerShow", "controllerPeek", "controllerEndPeek", "controllerSettingsChange" }.All(key => results[key] is true);
+            bool passed = new[] { "visualCreated", "inputCreated", "inputShown", "inputLayerAlpha", "inputNonActivating", "visualClickThrough", "visualNonActivating", "wpfRugHasPixels", "wpfOutsideTransparent", "regionApplied", "regionInside", "regionOutsideExcluded", "peekHidesBoth", "clothSettles", "finiteParticles", "rollAnimationCompletes", "unrollAnimationCompletes", "noAppWindowActivated", "settingsUiCreated", "controllerHide", "controllerShow", "controllerPeek", "controllerEndPeek", "controllerSettingsChange", "failedSettingsSavePreservesPreferences", "failedSettingsSaveHasDiagnostic", "nativeInteractionsPassed", "singleInstancePassed", "renderChecksPassed" }.All(key => results[key] is true);
+            passed &= results["framePipelineExecuted"] is true;
             if (results.TryGetValue("desktopZOrder", out var zOrder)) passed &= zOrder is true;
             results["offscreenSmokePassed"] = passed;
             await File.WriteAllTextAsync(Path.Combine(output, "diagnostics.json"), JsonSerializer.Serialize(results, new JsonSerializerOptions { WriteIndented = true }));

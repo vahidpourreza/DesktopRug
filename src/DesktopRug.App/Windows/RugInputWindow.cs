@@ -12,23 +12,29 @@ internal sealed class RugInputWindow : IDisposable
     private readonly nint _module = Native.GetModuleHandle(null);
     private readonly ClothSimulation _cloth;
     private DisplayInfo _display;
-    private readonly Native.Point[] _points;
-    private readonly int[] _counts;
+    private RugCoordinateSpace _space;
+    private readonly bool _allowOsCapture;
+    private readonly RugHitRegion _hitRegion;
     private Vector2 _start, _last;
     private bool _corner;
     private bool _regionValid;
+    private bool _ownsGrab;
+    private uint? _pointerId;
+    private long _lastPointerEvent;
     private long _lastClick;
     private Vector2 _lastClickPoint;
     internal event Action? PeekRequested, CompactRequested, Released, Activity;
     internal event Action<int>? RotateRequested;
-    internal bool IsDragging => _cloth.IsGrabbed;
+    internal event Action? DisplayMetricsChanged;
+    internal event Action<string>? Faulted;
+    internal bool IsDragging => _ownsGrab && _cloth.IsGrabbed;
     internal nint Handle { get; private set; }
 
-    internal RugInputWindow(DisplayInfo display, ClothSimulation cloth)
+    internal RugInputWindow(DisplayInfo display, ClothSimulation cloth, RugCoordinateSpace? space = null, bool allowOsCapture = true)
     {
         _display = display; _cloth = cloth;
-        int triangles = (cloth.Columns - 1) * (cloth.Rows - 1) * 2;
-        _points = new Native.Point[triangles * 3]; _counts = Enumerable.Repeat(3, triangles).ToArray();
+        _space = space ?? new(display.Bounds, (float)display.DpiScale); _allowOsCapture = allowOsCapture;
+        _hitRegion = new(cloth);
         _procedure = WindowProcedure;
         var windowClass = new Native.WindowClass
         {
@@ -63,28 +69,16 @@ internal sealed class RugInputWindow : IDisposable
             (int)display.Bounds.Width, (int)display.Bounds.Height, Native.NoActivation | Native.NoZOrder);
         UpdateRegion();
     }
-
-    internal nint BuildRegion()
+    internal void SetSpace(RugCoordinateSpace space)
     {
-        int index = 0;
-        void Triangle(int a, int b, int c)
-        {
-            Vector2 p = RugGeometry.Project(_cloth.Particles[a].Position) * (float)_display.DpiScale;
-            Vector2 q = RugGeometry.Project(_cloth.Particles[b].Position) * (float)_display.DpiScale;
-            Vector2 r = RugGeometry.Project(_cloth.Particles[c].Position) * (float)_display.DpiScale;
-            // Every projected triangle has the same winding, so folded triangles UNION instead of cancelling.
-            if ((q.X - p.X) * (r.Y - p.Y) - (q.Y - p.Y) * (r.X - p.X) < 0) (q, r) = (r, q);
-            _points[index++] = new((int)MathF.Round(p.X), (int)MathF.Round(p.Y));
-            _points[index++] = new((int)MathF.Round(q.X), (int)MathF.Round(q.Y));
-            _points[index++] = new((int)MathF.Round(r.X), (int)MathF.Round(r.Y));
-        }
-        for (int row = 0; row < _cloth.Rows - 1; row++) for (int col = 0; col < _cloth.Columns - 1; col++)
-        {
-            int a = row * _cloth.Columns + col, b = a + 1, c = a + _cloth.Columns, d = c + 1;
-            Triangle(a, b, c); Triangle(b, d, c);
-        }
-        return Native.CreatePolyPolygonRgn(_points, _counts, _counts.Length, 2);
+        var oldSpace = _space;
+        _space = space;
+        _start = space.ScreenToWorld(oldSpace.WorldToScreen(_start));
+        _last = space.ScreenToWorld(oldSpace.WorldToScreen(_last));
+        UpdateRegion();
     }
+
+    internal nint BuildRegion() => _hitRegion.Create(_display, _space);
     internal void UpdateRegion()
     {
         nint region = BuildRegion();
@@ -96,16 +90,20 @@ internal sealed class RugInputWindow : IDisposable
     internal void Hide() { CancelGrab(); Native.ShowWindow(Handle, 0); }
     internal void CancelGrab()
     {
-        if (!_cloth.IsGrabbed) return;
-        _cloth.EndGrab(); Native.ReleaseCapture(); Released?.Invoke();
+        bool pointerGesture = _pointerId is not null;
+        _pointerId = null;
+        if (pointerGesture) _lastPointerEvent = Environment.TickCount64;
+        if (!_ownsGrab) return;
+        _ownsGrab = false;
+        _cloth.EndGrab(); if (_allowOsCapture && !pointerGesture) Native.ReleaseCapture(); Released?.Invoke();
     }
 
     /// <summary>Non-activating windows cannot rely on foreground mouse capture outside their region.</summary>
     internal void PollDrag()
     {
-        if (!_cloth.IsGrabbed) return;
+        if (!IsDragging || !_allowOsCapture || _pointerId is not null) return;
         if ((Native.GetAsyncKeyState(1) & 0x8000) == 0) { CancelGrab(); return; }
-        if (Native.GetCursorPos(out var screen)) UpdateDrag(_display.ScreenToLocal(new Vector2(screen.X, screen.Y)));
+        if (Native.GetCursorPos(out var screen)) UpdateDrag(_space.ScreenToWorld(new Vector2(screen.X, screen.Y)));
     }
     private void UpdateDrag(Vector2 pointer)
     {
@@ -128,43 +126,94 @@ internal sealed class RugInputWindow : IDisposable
             nint result = Hook(hwnd, (int)message, wParam, lParam, ref handled);
             return handled ? result : Native.DefWindowProc(hwnd, message, wParam, lParam);
         }
-        catch
+        catch (Exception exception)
         {
             // Exceptions must never escape a native callback or leave an invisible blocking window.
             _regionValid = false; Native.ShowWindow(hwnd, 0);
+            try { Faulted?.Invoke(exception.GetType().Name); } catch { }
             return Native.DefWindowProc(hwnd, message, wParam, lParam);
         }
     }
     private nint Hook(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
     {
         if (message == Native.WmMouseActivate) { handled = true; return 3; }
-        if (message == 0x20) { Native.SetCursor(Native.LoadCursor(0, 32649)); handled = true; return 1; } // hand
-        if (message == Native.WmCaptureChanged) { if (_cloth.IsGrabbed) { _cloth.EndGrab(); Released?.Invoke(); } return 0; }
+        if (message == Native.WmDpiChanged) DisplayMetricsChanged?.Invoke();
+        if (message == PointerInput.WmPointerActivate) { handled = true; return PointerInput.NoActivate; }
+        if (PointerInput.IsPointerMessage(message))
+        {
+            uint id = PointerInput.GetPointerId(wParam);
+            if (PointerInput.TryRead(hwnd, message, wParam, lParam, out var sample))
+            {
+                handled = HandlePointer(sample); return 0;
+            }
+            if (_pointerId == id) { CancelGrab(); handled = true; }
+            return 0;
+        }
+        if (message == 0x20) { if (_allowOsCapture) Native.SetCursor(Native.LoadCursor(0, 32649)); handled = true; return 1; } // hand
+        if (message == Native.WmCaptureChanged)
+        {
+            _pointerId = null;
+            if (_ownsGrab) { _ownsGrab = false; _cloth.EndGrab(); Released?.Invoke(); }
+            return 0;
+        }
         if (message is not (Native.WmLButtonDown or Native.WmLButtonUp or Native.WmMouseMove or Native.WmRButtonUp or Native.WmMouseWheel)) return 0;
-        Native.GetCursorPos(out var screen);
-        Vector2 pointer = _display.ScreenToLocal(new Vector2(screen.X, screen.Y));
+        if ((_pointerId is not null || Environment.TickCount64 - _lastPointerEvent < 500) && PointerInput.IsPromotedMouseMessage())
+        { handled = true; return 0; }
+        var screen = new Native.Point((short)((long)lParam & 0xffff), (short)(((long)lParam >> 16) & 0xffff));
+        if (message != Native.WmMouseWheel) Native.ClientToScreen(hwnd, ref screen);
+        Vector2 pointer = _space.ScreenToWorld(new Vector2(screen.X, screen.Y));
         if (message == Native.WmLButtonDown)
         {
             long now = Environment.TickCount64;
-            if (now - _lastClick < 400 && Vector2.Distance(pointer, _lastClickPoint) < 6)
+            if (now - _lastClick < Native.GetDoubleClickTime() && Vector2.Distance(pointer, _lastClickPoint) < 6)
             { CancelGrab(); CompactRequested?.Invoke(); _lastClick = 0; handled = true; return 0; }
             _lastClick = now; _lastClickPoint = pointer;
-            int index = _cloth.Pick(pointer);
-            if (index >= 0)
-            {
-                int c = index % _cloth.Columns, r = index / _cloth.Columns;
-                _corner = (c < 4 || c >= _cloth.Columns - 4) && (r < 4 || r >= _cloth.Rows - 4);
-                _start = _last = pointer; _cloth.BeginGrab(index, pointer, _corner ? 70 : 15, _corner ? 45 : 80);
-                Native.SetCapture(Handle);
-                Activity?.Invoke();
-            }
+            BeginDrag(pointer, false);
         }
-        else if (message == Native.WmMouseMove && _cloth.IsGrabbed)
+        else if (message == Native.WmMouseMove && IsDragging)
             UpdateDrag(pointer);
         else if (message == Native.WmLButtonUp) CancelGrab();
         else if (message == Native.WmRButtonUp) { CancelGrab(); PeekRequested?.Invoke(); }
         else if (message == Native.WmMouseWheel) { CancelGrab(); RotateRequested?.Invoke((short)((long)wParam >> 16) > 0 ? 5 : -5); }
         handled = true; return 0;
+    }
+    private bool BeginDrag(Vector2 pointer, bool pointerGesture)
+    {
+        int index = _cloth.Pick(pointer);
+        if (index < 0 || (_cloth.IsGrabbed && !_ownsGrab)) return false;
+        int c = index % _cloth.Columns, r = index / _cloth.Columns;
+        _corner = (c < 4 || c >= _cloth.Columns - 4) && (r < 4 || r >= _cloth.Rows - 4);
+        _start = _last = pointer; _cloth.BeginGrab(index, pointer, _corner ? 70 : 15, _corner ? 45 : 80);
+        _ownsGrab = true;
+        if (_allowOsCapture && !pointerGesture) Native.SetCapture(Handle);
+        Activity?.Invoke(); return true;
+    }
+    internal bool HandlePointer(PointerSample sample)
+    {
+        if (sample.Phase is PointerPhase.Enter or PointerPhase.Leave) return _pointerId == sample.Id;
+        if (_pointerId is { } active && active != sample.Id) return true;
+        _lastPointerEvent = Environment.TickCount64;
+        if (sample.Phase == PointerPhase.Down)
+        {
+            if (_cloth.IsGrabbed) return true;
+            _pointerId = sample.Id;
+            if (sample.IsSecondary) { PeekRequested?.Invoke(); return true; }
+            if (!BeginDrag(_space.ScreenToWorld(sample.ScreenPosition), true)) _pointerId = null;
+            return _pointerId is not null;
+        }
+        if (_pointerId != sample.Id) return false;
+        if (sample.Phase is PointerPhase.Up or PointerPhase.Canceled)
+        {
+            if (_ownsGrab) CancelGrab();
+            _pointerId = null; return true;
+        }
+        if (IsDragging && sample.InContact)
+        {
+            Vector2 pointer = _space.ScreenToWorld(sample.ScreenPosition);
+            UpdateDrag(pointer);
+            if (_corner && sample.Pressure is { } pressure) _cloth.SetGrabTarget(pointer, 65 + (1 - pressure) * 120);
+        }
+        return true;
     }
     public void Dispose()
     {

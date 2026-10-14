@@ -31,11 +31,14 @@ internal sealed class DesktopIconService
         {
             var element = AutomationElement.FromHandle(list);
             var condition = new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem);
+            var cache = new CacheRequest { TreeScope = TreeScope.Element };
+            cache.Add(AutomationElement.NameProperty); cache.Add(AutomationElement.BoundingRectangleProperty); cache.Add(AutomationElement.IsOffscreenProperty);
+            using var activeCache = cache.Activate();
             var children = element.FindAll(TreeScope.Children, condition);
             List<DesktopIconInfo> icons = [];
             foreach (AutomationElement child in children)
             {
-                var current = child.Current;
+                var current = child.Cached;
                 var bounds = current.BoundingRectangle;
                 if (current.IsOffscreen || bounds.IsEmpty || bounds.Width <= 0 || bounds.Height <= 0) continue;
                 icons.Add(new(current.Name, new(bounds.X, bounds.Y, bounds.Width, bounds.Height)));

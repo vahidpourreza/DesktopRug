@@ -9,10 +9,13 @@ namespace DesktopRug.App.Rendering;
 public sealed class SkiaCanvas : FrameworkElement
 {
     private WriteableBitmap? _bitmap;
+    internal long PaintCount { get; private set; }
+    internal double TotalPaintMilliseconds { get; private set; }
     public event Action<SKCanvas, int, int>? Paint;
 
     protected override void OnRender(DrawingContext drawingContext)
     {
+        long start = System.Diagnostics.Stopwatch.GetTimestamp();
         base.OnRender(drawingContext);
         if (ActualWidth <= 0 || ActualHeight <= 0) return;
         var dpi = VisualTreeHelper.GetDpi(this);
@@ -32,5 +35,7 @@ public sealed class SkiaCanvas : FrameworkElement
         }
         finally { _bitmap.Unlock(); }
         drawingContext.DrawImage(_bitmap, new Rect(0, 0, ActualWidth, ActualHeight));
+        PaintCount++;
+        TotalPaintMilliseconds += System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
     }
 }

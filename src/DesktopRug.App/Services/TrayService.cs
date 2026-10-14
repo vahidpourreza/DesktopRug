@@ -27,21 +27,22 @@ internal sealed class TrayService : IDisposable
         while (_menu.Items.Count > 0) { var item = _menu.Items[0]; _menu.Items.RemoveAt(0); item.Dispose(); }
         void Item(string text, Action action) => _menu.Items.Add(text, null, (_, _) => action());
         Item("Show rug", _controller.ShowRug); Item("Hide rug    Ctrl+Alt+Esc", _controller.HideRug);
-        Item(_controller.PeekActive ? "End peek" : "Peek at desktop    Ctrl+Alt+P", _controller.Peek);
+        Item(_controller.PeekActive ? "End peek" : $"Peek at desktop    {_controller.Settings.PeekShortcut}", _controller.Peek);
         _menu.Items.Add(new ToolStripSeparator());
         Item("Flatten rug", _controller.Flatten); Item("Restore saved position", _controller.RestorePosition);
+        Item(_controller.IsRolled ? "Unroll rug" : "Roll up rug", _controller.ToggleRoll);
         var sizeMenu = new ToolStripMenuItem("Rug size");
         foreach (RugSize size in Enum.GetValues<RugSize>())
         {
             var option = new ToolStripMenuItem(size == RugSize.ExtraLarge ? "Extra large" : size.ToString()) { Checked = _controller.Settings.Size == size };
-            option.Click += (_, _) => _controller.ApplySettings(_controller.Settings with { Size = size }); sizeMenu.DropDownItems.Add(option);
+            option.Click += async (_, _) => await _controller.ApplySettingsAsync(_controller.Settings with { Size = size }); sizeMenu.DropDownItems.Add(option);
         }
         _menu.Items.Add(sizeMenu);
         var patternMenu = new ToolStripMenuItem("Pattern");
         foreach (RugPattern pattern in new[] { RugPattern.Kashan, RugPattern.Tabriz, RugPattern.Modern })
         {
             var option = new ToolStripMenuItem(pattern.ToString()) { Checked = _controller.Settings.Pattern == pattern };
-            option.Click += (_, _) => _controller.ApplySettings(_controller.Settings with { Pattern = pattern }); patternMenu.DropDownItems.Add(option);
+            option.Click += async (_, _) => await _controller.ApplySettingsAsync(_controller.Settings with { Pattern = pattern }); patternMenu.DropDownItems.Add(option);
         }
         _menu.Items.Add(patternMenu);
         Item("Rotate clockwise", () => _controller.Rotate(15));
@@ -49,7 +50,7 @@ internal sealed class TrayService : IDisposable
         void Toggle(string label, bool value, Func<RugSettings> settings)
         {
             var item = new ToolStripMenuItem(label) { Checked = value };
-            item.Click += (_, _) => _controller.ApplySettings(settings()); _menu.Items.Add(item);
+            item.Click += async (_, _) => await _controller.ApplySettingsAsync(settings()); _menu.Items.Add(item);
         }
         Toggle("Fabric sounds", _controller.Settings.Sound, () => _controller.Settings with { Sound = !_controller.Settings.Sound });
         Toggle("Icon-aware bumps", _controller.Settings.IconBumps, () => _controller.Settings with { IconBumps = !_controller.Settings.IconBumps });
