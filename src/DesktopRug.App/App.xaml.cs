@@ -9,6 +9,7 @@ public partial class App : Application
     private SingleInstanceService? _singleInstance;
     private RugController? _controller;
     private AppLog? _log;
+    private AppLanguage _startupLanguage = AppLanguage.English;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -20,6 +21,14 @@ public partial class App : Application
             _log.Write("error", "unhandled-ui", args.Exception.GetType().Name);
             _controller?.HideRug(); args.Handled = true; Shutdown(1);
         };
+        if (e.Args.Contains("--language-diagnostics"))
+        {
+            int index = Array.IndexOf(e.Args, "--language-diagnostics");
+            string output = e.Args.Length > index + 1 ? Path.GetFullPath(e.Args[index + 1]) : Path.Combine(directory, "language-diagnostics");
+            var report = await LanguageDiagnostics.RunAsync(output);
+            Shutdown(report.TryGetValue("languageChecksPassed", out var passed) && passed is true ? 0 : 1);
+            return;
+        }
         if (e.Args.Contains("--diagnostics"))
         {
             int index = Array.IndexOf(e.Args, "--diagnostics");
@@ -39,13 +48,16 @@ public partial class App : Application
                 Shutdown(); return;
             }
             var store = new SettingsService(directory); var settings = await store.LoadAsync();
+            _startupLanguage = settings.Language;
             if (store.Diagnostic is { } diagnostic) _log.Write("warning", "settings-recovered", diagnostic);
             _controller = new(settings, store, _log);
         }
         catch (Exception exception)
         {
             _log.Write("error", "startup-failed", exception.GetType().Name);
-            MessageBox.Show("Desktop Rug could not start. Details are in LocalAppData\\DesktopRug\\desktop-rug.log. Your desktop has not been changed.", "Desktop Rug", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(UiText.Get(_startupLanguage, "Desktop Rug could not start. Details are in LocalAppData\\DesktopRug\\desktop-rug.log. Your desktop has not been changed."),
+                UiText.Get(_startupLanguage, "Desktop Rug"), MessageBoxButton.OK, MessageBoxImage.Error, MessageBoxResult.OK,
+                UiText.IsRtl(_startupLanguage) ? MessageBoxOptions.RtlReading | MessageBoxOptions.RightAlign : MessageBoxOptions.None);
             Shutdown(1);
         }
     }

@@ -4,9 +4,11 @@ A native Windows rug that you can drag, lift and fold over your **real desktop i
 
 ![A folded procedural Persian rug](docs/media/fold.png)
 
-**0.2 preview — Windows 10/11, x64.** Includes persistent desktop layering, continuous cross-monitor cloth, customizable Peek, animated rolling, touch/pen handling and stronger fold contacts. Automated/native off-screen checks pass. Physical Windows 11, mixed-DPI hardware, touch/pen devices and disruptive shell/session checks still need verification. See [requirement coverage](docs/REQUIREMENTS.md) and [validation](docs/VALIDATION.md).
+**0.3 preview — Windows 10/11, x64.** Includes English/Persian settings and tray menus, persistent desktop layering, continuous cross-monitor cloth, customizable Peek, animated rolling, touch/pen handling and stronger fold contacts. Automated/native off-screen checks pass. Physical Windows 11, mixed-DPI hardware, touch/pen devices and disruptive shell/session checks still need verification. See [requirement coverage](docs/REQUIREMENTS.md) and [validation](docs/VALIDATION.md).
 
 ## Use it
+
+Download the Windows ZIP from [GitHub Releases](https://github.com/vahidpourreza/DesktopRug/releases), extract it, and keep the license notices with the executable. To upgrade, **Exit** the old copy from its tray menu before launching the new copy; your saved settings are retained.
 
 Launch `DesktopRug.exe`, then visit your desktop with **Win+D**. The rug stays above desktop icons and below ordinary application windows, including exposed desktop areas while another app is active. It sleeps when settled or fully covered. Look for the little rug in the notification area (including the hidden-icons overflow).
 
@@ -26,6 +28,8 @@ Launch `DesktopRug.exe`, then visit your desktop with **Win+D**. The rug stays a
 Peek hides every rendering and input surface so the real desktop receives clicks directly. Choose timed, toggle, or hold-the-shortcut activation, a custom chord, and optional right-click activation in settings. For hold mode, the tray and right-click use timed Peek so they remain usable without a held key. Rebinding a conflicting shortcut preserves the previous binding. **Hide rug** remains hidden until explicitly shown again. If the emergency shortcut cannot be registered, the rug stays hidden and settings explain the conflict.
 
 Settings include three original procedural designs, four sizes plus a scale adjustment, rotation, lighting, shadow, weave detail, an initial monitor and an optional local image. Custom images are fitted without cropping or overwriting the source. Mouse, touch and pen use the same cloth gestures; pen pressure can control corner lift. Synthetic fabric sounds vary subtly and are off by default. Economy uses a smaller grid and a 30 Hz target; Balanced and High use a composition-driven 60 Hz target when hardware allows.
+
+Choose **Settings → Language → English / فارسی**. The settings window previews the selected language immediately without discarding other unsaved edits. **Save changes** persists it and updates the tray menu; **Cancel** keeps the saved language. Persian uses right-to-left layout while shortcuts, filenames and rug artwork keep their original orientation. Preferences, including language, are stored in `%LOCALAPPDATA%\DesktopRug\settings.json`.
 
 | Kashan | Tabriz | Modern |
 | --- | --- | --- |
@@ -78,3 +82,5 @@ One cloth simulation is rendered through a separate window pair on each monitor.
 Roll/unroll is an animated material-preserving guide, with free cloth physics resuming when grabbed. Swept vertex/triangle contacts substantially reduce fold penetration; pathological edge–edge crossings are not mathematically eliminated. Performance reports distinguish CPU raster timing from WPF/native pipeline timing and from physical display presentation. Installer work remains deferred until the manual acceptance checks are completed.
 
 See [architecture](docs/ARCHITECTURE.md), [Windows integration](docs/WINDOWS_INTEGRATION.md), [manual checks](docs/MANUAL_TESTS.md), and [validation evidence](docs/VALIDATION.md).
+
+Each completed change set receives a versioned GitHub preview with a portable Windows download; see [the release workflow](docs/RELEASING.md).

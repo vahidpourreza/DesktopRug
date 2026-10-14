@@ -5,7 +5,13 @@ using DesktopRug.Core;
 namespace DesktopRug.App.Services;
 
 internal sealed record DesktopIconInfo(string Label, RectD Bounds);
-internal sealed record IconSnapshot(IReadOnlyList<DesktopIconInfo> Icons, string Diagnostic, bool Available);
+internal sealed record IconSnapshot(IReadOnlyList<DesktopIconInfo> Icons, string DiagnosticKey, bool Available, object[]? DiagnosticArguments = null)
+{
+    // Reports and diagnostic assertions stay in English; the UI renders the same structured
+    // result in its current or locally previewed language without another Explorer query.
+    internal string Diagnostic => GetDiagnostic(AppLanguage.English);
+    internal string GetDiagnostic(AppLanguage language) => UiText.Get(language, DiagnosticKey, DiagnosticArguments ?? []);
+}
 
 /// <summary>Read-only UI Automation, scoped to Explorer's desktop ListView. No remote-process writes or shell mutations.</summary>
 internal sealed class DesktopIconService
@@ -43,7 +49,7 @@ internal sealed class DesktopIconService
                 if (current.IsOffscreen || bounds.IsEmpty || bounds.Width <= 0 || bounds.Height <= 0) continue;
                 icons.Add(new(current.Name, new(bounds.X, bounds.Y, bounds.Width, bounds.Height)));
             }
-            return new(icons, $"Tracking {icons.Count} real desktop icons through Windows accessibility.", true);
+            return new(icons, "Tracking {0} real desktop icons through Windows accessibility.", true, [icons.Count]);
         }
         catch (Exception ex) when (ex is ElementNotAvailableException or InvalidOperationException or System.Runtime.InteropServices.COMException
             or ArgumentException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)

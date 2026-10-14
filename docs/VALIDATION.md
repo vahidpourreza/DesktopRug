@@ -1,8 +1,38 @@
-# Validation — 0.2 preview, 2026-10-14
+# Validation — 0.3 preview, 2026-10-14
 
 Status: **implementation gaps addressed; core, native-fixture and off-screen pipeline checks verified; physical release acceptance pending.** See [requirement coverage](REQUIREMENTS.md). Compilation and fixtures alone do not complete the original release definition of done.
 
-## Executed evidence
+## Language update — 0.3
+
+The language change is verified separately from the earlier native/physics baseline below. It does not imply new physical-device acceptance.
+
+| Check | Result |
+| --- | --- |
+| Release build | Passed, zero warnings / errors |
+| xUnit | 92 passed, zero failed / skipped, including 16 language cases |
+| Self-contained win-x64 build | Locked RID restore and portable publish passed; the packaged executable's language diagnostic exited 0 |
+| English/Persian preview | Translated labels, LTR/RTL direction and all dirty controls preserved through a round trip |
+| Cancel and Save handlers | Cancel retained the old language and settings; Save persisted the selected language and draft values |
+| Reopening settings | Saved Persian reopened in RTL |
+| Mixed-direction content | Shortcut input and filename stayed LTR; asymmetric custom artwork stayed red-left/blue-right in both languages |
+| Normal/narrow settings | Control bounds checked at 610px and 500px; top and Peek sections rendered off-screen for visual inspection |
+| Scene preservation | Language-only and unchanged round-trip saves retained cloth identity, native surfaces, particle positions and roll state |
+| Failed language save | An isolated blocked-parent store returned failure while preserving the old settings, scene and roll state |
+| User-session safety | Isolated settings, startup preference unchanged, no application window activated |
+
+Core tests cover old-settings compatibility, language persistence and fallback, complete translation pairs and matching format arguments, translated choice labels, culture-safe formatting, shortcut preservation and tray-tooltip length. The settings diagnostic uses actual WPF Cancel/Save handlers, not an alternative persistence implementation. It renders the complete HWND visual root so RTL ancestor transforms are included; subtree-only screenshots would incorrectly mirror the result.
+
+Reproduce the focused check with a built or published executable:
+
+```powershell
+& 'artifacts/release-0.3/DesktopRug.exe' --language-diagnostics artifacts/language-release-03-check
+```
+
+Evidence is local under ignored `artifacts/language-release-03-check`. The test never captures the real desktop or changes startup registration. These are programmatic/off-screen checks; real user input, font availability on other systems, and hardware acceptance remain separate.
+
+## Native/physics baseline — 0.2
+
+The following evidence was executed for 0.2. Its timings and physical integration observations are not claimed as freshly measured for the language update.
 
 Environment: Windows 10 build 19045, .NET SDK 10.0.401 / runtime 10.0.12, one physical display at 100% DPI. Application checks used off-screen windows without taking desktop focus.
 

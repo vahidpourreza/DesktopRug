@@ -42,24 +42,40 @@ internal sealed class RugController : IDisposable
     private long _lastIcons;
     private long _nextDisplayRetry;
     private bool _displayRefreshPending;
-    private bool _requested = true, _presented, _locked, _suspended, _disposed, _refreshing, _applying, _rebuilding;
+    private bool _requested = true, _presented, _locked, _suspended, _disposed, _refreshing, _applying, _languageOnlyApplying, _rebuilding;
     private bool _savingPosition, _saveRequested, _lastPeek, _landingSoundPending;
     private TaskCompletionSource? _saveCompletion;
     private IconSnapshot? _lastSnapshot;
     private string _iconSignature = "";
-    private string? _peekError;
+    private string? _peekErrorKey;
+    private object[] _peekErrorArguments = [];
+    private string _diagnosticKey = "Looking for the Windows desktop…";
+    private object[] _diagnosticArguments = [];
     internal RugSettings Settings { get; private set; }
     internal IReadOnlyList<DisplayInfo> Displays { get; private set; }
-    internal string Diagnostic { get; private set; } = "Looking for the Windows desktop…";
-    internal string HotkeyDiagnostic => !_emergencyRegistered && !_suppressPresentation
-        ? "Ctrl+Alt+Esc is in use. The rug stays hidden until its emergency shortcut is available. Close the conflicting app and relaunch."
-        : $"Emergency hide: Ctrl+Alt+Esc. {(_toggleRegistered || _suppressPresentation ? "Show / hide: Ctrl+Alt+R." : "Ctrl+Alt+R is in use; use the tray.")} "
-            + (_peekError ?? $"Peek: {Settings.PeekShortcut} ({Settings.PeekMode.ToString().ToLowerInvariant()}).");
+    internal string Diagnostic => GetDiagnostic(AppLanguage.English);
+    internal string HotkeyDiagnostic => GetHotkeyDiagnostic(AppLanguage.English);
+    internal string GetDiagnostic(AppLanguage language) => UiText.Get(language, _diagnosticKey, _diagnosticArguments);
+    internal string GetHotkeyDiagnostic(AppLanguage language)
+    {
+        if (!_emergencyRegistered && !_suppressPresentation)
+            return UiText.Get(language, "Ctrl+Alt+Esc is in use. The rug stays hidden until its emergency shortcut is available. Close the conflicting app and relaunch.");
+        return UiText.Get(language, "Emergency hide: Ctrl+Alt+Esc.") + " "
+            + UiText.Get(language, _toggleRegistered || _suppressPresentation ? "Show / hide: Ctrl+Alt+R." : "Ctrl+Alt+R is in use; use the tray.") + " "
+            + (_peekErrorKey is { } key ? UiText.Get(language, key, _peekErrorArguments)
+                : UiText.Get(language, "Peek: {0} ({1}).", Settings.PeekShortcut, UiText.PeekMode(language, Settings.PeekMode)));
+    }
+    private void SetDiagnostic(string key, params object[] arguments) { _diagnosticKey = key; _diagnosticArguments = arguments; }
+    private void CapturePeekError() { _peekErrorKey = _peekHotkey.ErrorKey; _peekErrorArguments = _peekHotkey.ErrorArguments; }
     internal bool PeekActive => _peek.IsActive(DateTimeOffset.UtcNow);
     internal bool RugRequested => _requested;
     internal bool IsApplying => _applying;
     internal bool IsRolled => _cloth.IsRolled;
     internal event Action? Changed;
+
+    /// <summary>Immutable copies for isolated diagnostics; never changes cloth or window state.</summary>
+    internal SceneDiagnosticSnapshot CaptureSceneDiagnostics() => new(_cloth, _handles.ToArray(),
+        _cloth.Particles.Select(p => p.Position).ToArray(), _cloth.IsRolled);
 
     internal RugController(RugSettings settings, SettingsService store, AppLog log, bool suppressPresentation = false)
     {
@@ -72,7 +88,7 @@ internal sealed class RugController : IDisposable
         _emergencyRegistered = !suppressPresentation && Native.RegisterHotKey(_messages.Handle, 1, 0x4003, 0x1B);
         _toggleRegistered = !suppressPresentation && Native.RegisterHotKey(_messages.Handle, 2, 0x4003, 0x52);
         _peekHotkey = new(_messages.Handle, suppressPresentation);
-        _peekHotkey.TrySetShortcut(Settings.PeekShortcut, out _peekError);
+        _peekHotkey.TrySetShortcut(Settings.PeekShortcut, out _); CapturePeekError();
         _frames = new(); _frames.Tick += Frame;
         _maintenance = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(250) }; _maintenance.Tick += Maintain;
         _iconTimer = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(50) }; _iconTimer.Tick += RefreshIcons;
@@ -105,7 +121,7 @@ internal sealed class RugController : IDisposable
         {
             _log.Write("warning", "texture-fallback", ex.GetType().Name);
             Settings = Settings with { Pattern = RugPattern.Kashan }; _renderer = new(_cloth, Settings);
-            Diagnostic = "Custom image unavailable. The original image is unchanged; using Kashan.";
+            SetDiagnostic("Custom image unavailable. The original image is unchanged; using Kashan.");
         }
         CreateSurfaces();
         _audio.Enabled = Settings.Sound; _presented = false; _iconSignature = ""; _lastIcons = 0;
@@ -124,7 +140,7 @@ internal sealed class RugController : IDisposable
             surface.Input.Faulted += reason =>
             {
                 _log.Write("error", "input-surface-retry", reason);
-                Diagnostic = "The input surface is recovering. Emergency hide and the tray remain available.";
+                SetDiagnostic("The input surface is recovering. Emergency hide and the tray remain available.");
                 _displayRefreshPending = true; _nextDisplayRetry = Environment.TickCount64 + 1000;
                 UpdateVisibility();
             };
@@ -179,10 +195,19 @@ internal sealed class RugController : IDisposable
     {
         if (_applying || _disposed) return false;
         if (requested.PeekShortcut is null || !requested.PeekShortcut.TryValidate(out _))
-        { Diagnostic = "Choose a valid Peek shortcut with Ctrl or Alt."; Changed?.Invoke(); return false; }
+        { SetDiagnostic("Choose a valid Peek shortcut with Ctrl or Alt."); Changed?.Invoke(); return false; }
         var next = requested.Validated();
+        var languageComparison = next with { Language = Settings.Language };
+        // The settings monitor selector shows the effective primary display on a first launch,
+        // even while the persisted/default monitor identity is still empty.
+        if (Settings.Monitor.Length == 0 && languageComparison.Monitor == _display.DeviceName)
+            languageComparison = languageComparison with { Monitor = Settings.Monitor };
+        // Saving after a language-preview round trip is also a lightweight transaction: an
+        // unchanged language must not flatten the rug or recreate its native surfaces.
+        if (languageComparison == Settings)
+            return await ApplyLanguageAsync(next.Language);
         if (next.Pattern == RugPattern.Custom && next.CustomTexturePath is null)
-        { Diagnostic = "Choose a local image before selecting Custom."; Changed?.Invoke(); return false; }
+        { SetDiagnostic("Choose a local image before selecting Custom."); Changed?.Invoke(); return false; }
         _applying = true; HideAll(); Changed?.Invoke();
         var previous = Settings;
         bool loginChanged = false, bindingChanged = false;
@@ -193,23 +218,23 @@ internal sealed class RugController : IDisposable
             var currentDisplays = _topology.Discover();
             if (currentDisplays.Count == 0) throw new InvalidOperationException("No interactive display is currently available.");
             if (!_peekHotkey.TrySetShortcut(next.PeekShortcut, out string? error))
-            { Diagnostic = error!; return false; }
+            { SetDiagnostic(_peekHotkey.ErrorKey ?? error!, _peekHotkey.ErrorArguments); return false; }
             bindingChanged = true;
             if (next.LaunchAtLogin != previous.LaunchAtLogin)
             { StartupService.SetEnabled(next.LaunchAtLogin); loginChanged = true; }
             await _store.SaveAsync(next);
             _rebuilding = true; HideAll(); DisposeSurfaces(); _renderer.Dispose();
             Displays = currentDisplays; _displayRefreshPending = false;
-            Settings = next; _peek.Reset(); _peekError = null; CreateScene();
-            Diagnostic = "Settings saved.";
+            Settings = next; _peek.Reset(); _peekErrorKey = null; _peekErrorArguments = []; CreateScene();
+            SetDiagnostic("Settings saved."); _tray?.RefreshLanguage();
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or System.Security.SecurityException
             or System.ComponentModel.Win32Exception or InvalidOperationException)
         {
             _log.Write("error", "apply-settings", ex.GetType().Name);
-            Diagnostic = "Changes could not be saved or applied. Previous settings were retained. Check the image and local app-data access.";
-            if (bindingChanged) _peekHotkey.TrySetShortcut(previous.PeekShortcut, out _peekError);
+            SetDiagnostic("Changes could not be saved or applied. Previous settings were retained. Check the image and local app-data access.");
+            if (bindingChanged) { _peekHotkey.TrySetShortcut(previous.PeekShortcut, out _); CapturePeekError(); }
             if (loginChanged)
             {
                 try { StartupService.SetEnabled(previous.LaunchAtLogin); }
@@ -226,6 +251,39 @@ internal sealed class RugController : IDisposable
         finally { _rebuilding = false; _applying = false; UpdateVisibility(); Changed?.Invoke(); }
     }
 
+    private async Task<bool> ApplyLanguageAsync(AppLanguage language)
+    {
+        _applying = true; _languageOnlyApplying = true; Changed?.Invoke();
+        RugSettings? persisted = null;
+        bool saved = false;
+        try
+        {
+            if (_saveCompletion is { } pendingSave) await pendingSave.Task;
+            persisted = Settings with { Language = language };
+            await _store.SaveAsync(persisted);
+            // Movement may complete while disk I/O is pending. Preserve its latest coordinates,
+            // cloth state, monitor frame, Peek state, and native resources.
+            Settings = Settings with { Language = language };
+            saved = true;
+            SetDiagnostic("Settings saved.");
+            _tray?.RefreshLanguage();
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            _log.Write("error", "language-save", ex.GetType().Name);
+            SetDiagnostic("Changes could not be saved or applied. Previous settings were retained. Check the image and local app-data access.");
+            return false;
+        }
+        finally
+        {
+            _languageOnlyApplying = false; _applying = false;
+            // A position save suppressed during the language transaction must not be lost.
+            if (saved && persisted is not null && Settings != persisted) Save();
+            UpdateVisibility(); Changed?.Invoke();
+        }
+    }
+
     internal void OpenSettings()
     {
         if (_settingsWindow is { IsVisible: true }) { _settingsWindow.Activate(); return; }
@@ -233,7 +291,7 @@ internal sealed class RugController : IDisposable
     }
     internal async void Exit()
     {
-        if (_applying) { Diagnostic = "Wait for the current settings save before exiting."; Changed?.Invoke(); return; }
+        if (_applying) { SetDiagnostic("Wait for the current settings save before exiting."); Changed?.Invoke(); return; }
         CapturePosition(); HideRug();
         try
         {
@@ -269,7 +327,7 @@ internal sealed class RugController : IDisposable
     private void UpdateVisibility()
     {
         if (_disposed || _rebuilding) return;
-        bool allowed = !_suppressPresentation && !_applying && !_displayRefreshPending && _requested && !PeekActive && !_locked && !_suspended
+        bool allowed = !_suppressPresentation && (!_applying || _languageOnlyApplying) && !_displayRefreshPending && _requested && !PeekActive && !_locked && !_suspended
             && _emergencyRegistered && _desktop.IsAvailable(_host);
         if (!allowed) { if (_presented) HideAll(); return; }
         RectD rug = ClothScreenBounds();
@@ -312,7 +370,7 @@ internal sealed class RugController : IDisposable
     }
     private void Frame(object? sender, EventArgs e)
     {
-        if (!_presented || _applying) { _frames.Stop(); return; }
+        if (!_presented || (_applying && !_languageOnlyApplying)) { _frames.Stop(); return; }
         double now = _clock.Elapsed.TotalSeconds;
         foreach (var surface in _surfaces) surface.Input.PollDrag();
         _cloth.Advance(now - _lastFrame); _lastFrame = now;
@@ -345,12 +403,12 @@ internal sealed class RugController : IDisposable
         {
             var snapshot = await _icons.ReadAsync(_host.IconList).WaitAsync(TimeSpan.FromSeconds(1));
             if (_disposed || _applying || !Settings.IconBumps) return;
-            _lastSnapshot = snapshot; Diagnostic = snapshot.Diagnostic;
+            _lastSnapshot = snapshot; SetDiagnostic(snapshot.DiagnosticKey, snapshot.DiagnosticArguments ?? []);
             string signature = string.Join(';', snapshot.Icons.Select(i => i.Bounds.ToString()));
             if (signature != _iconSignature) { _iconSignature = signature; ApplyBumps(); Wake(); }
             Changed?.Invoke();
         }
-        catch (TimeoutException) { Diagnostic = "Explorer is slow to respond. The rug remains usable; icon tracking will recover when Explorer responds."; Changed?.Invoke(); }
+        catch (TimeoutException) { SetDiagnostic("Explorer is slow to respond. The rug remains usable; icon tracking will recover when Explorer responds."); Changed?.Invoke(); }
         finally { _refreshing = false; }
     }
     private void ApplyBumps() => _cloth.Bumps.SetIcons(Settings.IconBumps && _lastSnapshot is { } snapshot
@@ -391,7 +449,7 @@ internal sealed class RugController : IDisposable
         _saveCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
         try { while (_saveRequested) { _saveRequested = false; await _store.SaveAsync(Settings); } }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        { _log.Write("error", "settings-save", ex.GetType().Name); Diagnostic = "Settings could not be saved. Check local app-data access."; }
+        { _log.Write("error", "settings-save", ex.GetType().Name); SetDiagnostic("Settings could not be saved. Check local app-data access."); }
         finally { _savingPosition = false; _saveCompletion.TrySetResult(); }
     }
     private nint MessageHook(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
@@ -434,7 +492,7 @@ internal sealed class RugController : IDisposable
         {
             DisposeSurfaces(); _displayRefreshPending = true; _nextDisplayRetry = Environment.TickCount64 + 2000;
             _log.Write("warning", "display-rebuild-retry", ex.GetType().Name);
-            Diagnostic = "The display configuration is changing. The rug is hidden while its surfaces recover.";
+            SetDiagnostic("The display configuration is changing. The rug is hidden while its surfaces recover.");
         }
         finally { _rebuilding = false; }
         if (recovered) { CapturePosition(); Save(); Wake(); Changed?.Invoke(); }
@@ -470,3 +528,5 @@ internal sealed class RugController : IDisposable
         public void Dispose() { Input.Dispose(); Visual.Close(); }
     }
 }
+
+internal sealed record SceneDiagnosticSnapshot(object ClothIdentity, (nint Visual, nint Input)[] Handles, Vector3[] Positions, bool Rolled);

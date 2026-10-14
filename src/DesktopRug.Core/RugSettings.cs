@@ -9,6 +9,7 @@ public enum SimulationQuality { Economy, Balanced, High }
 public sealed record RugSettings
 {
     public int Version { get; init; } = 1;
+    public AppLanguage Language { get; init; } = AppLanguage.English;
     public double CenterX { get; init; } = .43;
     public double CenterY { get; init; } = .5;
     public RugSize Size { get; init; } = RugSize.Medium;
@@ -34,6 +35,7 @@ public sealed record RugSettings
     public RugSettings Validated() => this with
     {
         Version = 1,
+        Language = Enum.IsDefined(Language) ? Language : AppLanguage.English,
         CenterX = double.IsFinite(CenterX) ? Math.Clamp(CenterX, .05, .95) : .43,
         CenterY = double.IsFinite(CenterY) ? Math.Clamp(CenterY, .05, .95) : .5,
         Rotation = float.IsFinite(Rotation) ? ((Rotation % 360) + 360) % 360 : 0,
