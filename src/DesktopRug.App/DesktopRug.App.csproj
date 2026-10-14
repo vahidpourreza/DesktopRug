@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Resources/rug.ico</ApplicationIcon>
+    <AssemblyName>DesktopRug</AssemblyName>
+    <Version>0.1.0</Version>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- WPF owns the entry point; its PerMonitorV2 manifest is intentional. WinForms is used only for NotifyIcon. -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../DesktopRug.Core/DesktopRug.Core.csproj" />
+    <PackageReference Include="SkiaSharp" Version="4.153.1" />
+    <Content Include="../../licenses/*" Link="licenses/%(Filename)%(Extension)" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+  </ItemGroup>
+  <Target Name="ExcludePublishSymbols" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup><ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(ResolvedFileToPublish.Extension)' == '.pdb'" /></ItemGroup>
+  </Target>
+</Project>

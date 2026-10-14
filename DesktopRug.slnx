@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DesktopRug.Core/DesktopRug.Core.csproj" />
+    <Project Path="src/DesktopRug.App/DesktopRug.App.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DesktopRug.Tests/DesktopRug.Tests.csproj" />
+  </Folder>
+</Solution>
