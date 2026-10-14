@@ -3,7 +3,7 @@
 ## Responsibilities
 
 - `DesktopRug.Core`: framework-independent geometry, display coordinate mapping, validated settings, atomic persistence, smooth icon bump field, deterministic Verlet cloth.
-- `Rendering/PatternFactory`: generates three original textures and optionally reads a user-supplied image. No commercial artwork, pre-rendered animation or network assets.
+- `Rendering/PatternFactory`: samples three embedded, user-supplied reference images into high-detail body textures and optionally reads a custom local image. Sources are retained unchanged; photographed floor/fringe are excluded from the body mapping and fringe is rendered along the appropriate cloth edges. No runtime network assets or pre-rendered animation.
 - `Rendering/RugRenderer`, `AdaptiveRugMesh`, `RugMaterialRasterizer`: project and depth-sort the cloth, merge sufficiently coplanar patches, and draw full-resolution texture/vertex lighting with a specialized AVX2-or-scalar material pass. Skia composes the surface with shadows, edge thickness and fringe.
 - `Windows/RugOverlayWindow`: transparent WPF + Skia visual surface, always non-activating and click-through.
 - `Windows/RugInputWindow` and `RugHitRegion`: a distinct, non-activating native layered input window per monitor. A reusable scanline mask unions projected triangles and emits coalesced native region rectangles, excluding shadows, holes and empty space. Mouse, touch and pen share gesture handling.
@@ -32,5 +32,7 @@ Arrays, region masks, raster targets and paint objects are reused. Skia path sna
 ## Storage and lifecycle
 
 Settings use normalized monitor-local center, named size plus scale, rotation, Peek configuration and last monitor identity. Crossing DPI boundaries preserves physical dimensions and updates the persisted scale. Missing monitors move the cloth onto an available display. Shape deformation is intentionally not persisted. JSON writes are serialized, flushed and replaced atomically; unreadable JSON receives a recovery copy. Explicit settings application drains pending position saves, reserves the new shortcut without losing the old one, awaits persistence, and retains errors in the dialog. Display notifications arriving during an apply are queued and topology is rediscovered before reconstruction.
+
+Live preferences retain the loaded material and cloth. A material-save failure before scene teardown also retains them, even if the custom source has disappeared. If native surface creation fails after teardown, recovery must reload the previous material: an unavailable custom source falls back to the rich red portrait rug, resets geometry to its actual proportions, and persists the recovered settings. Diagnostics cover missing/corrupt startup sources and failed saves before teardown; forced native creation failure after teardown is a source-inspected limitation, not an executed test.
 
 `SingleInstanceService` uses a per-session mutex and an early-created named event, marshals show requests onto the owner thread, and handles abandoned ownership and shutdown races. No entry window is shown automatically. The tray owns lifetime. Shutdown saves settings, removes hotkeys/hooks/surfaces and releases primary ownership last. Diagnostic kernel objects use unique names and never signal a live app. Diagnostic outputs are isolated and no sign-in setting is written.

@@ -88,6 +88,34 @@ jobs:
             }
           } finally { $archive.Dispose() }
           "RELEASE_ASSET=$asset" >> $env:GITHUB_ENV
+      - name: Compile Windows setup
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $compiler = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+          if (!$compiler) {
+            $candidates = @("${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe", "$env:ProgramFiles/Inno Setup 6/ISCC.exe")
+            $compiler = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          }
+          if (!$compiler) { throw 'Inno Setup 6 is missing from this Windows runner image.' }
+          $portable = (Resolve-Path artifacts/release/portable).Path
+          $destination = (Resolve-Path artifacts/release).Path
+          & $compiler "/DAppVersion=$env:RELEASE_VERSION" "/DSourceDir=$portable" "/DOutputDir=$destination" packaging/desktop-rug.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $installer = Join-Path $destination "DesktopRug-$env:RELEASE_VERSION-Setup-x64.exe"
+          if (!(Test-Path -LiteralPath $installer)) { throw 'Windows setup executable is missing.' }
+          "RELEASE_INSTALLER=$installer" >> $env:GITHUB_ENV
+      - name: Verify install, upgrade and uninstall on disposable runner
+        run: |
+          pwsh -NoProfile -File scripts/test-installer.ps1 -InstallerPath $env:RELEASE_INSTALLER -ExpectedVersion $env:RELEASE_VERSION
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain installer smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DesktopRug-installer-smoke
+          path: ${{ runner.temp }}/DesktopRug-installer-*/*
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Publish verified GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
@@ -96,12 +124,15 @@ jobs:
           $tag = $env:GITHUB_REF_NAME
           $api = "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY"
           $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
-          $assetName = [IO.Path]::GetFileName($env:RELEASE_ASSET)
-          $digest = (Get-FileHash -LiteralPath $env:RELEASE_ASSET -Algorithm SHA256).Hash.ToLowerInvariant()
+          $packages = @($env:RELEASE_ASSET, $env:RELEASE_INSTALLER) | ForEach-Object {
+            [pscustomobject]@{ Path = $_; Name = [IO.Path]::GetFileName($_); Digest = (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLowerInvariant() }
+          }
           $sourceMarker = "<!-- desktoprug-source:$env:RELEASE_SOURCE -->"
           $notesFile = 'artifacts/release/release-notes.md'
           $notes = Get-Content -Raw -LiteralPath "docs/releases/$env:RELEASE_VERSION.md"
-          "$notes`n`n$sourceMarker`n<!-- desktoprug-asset-sha256:$digest -->" | Set-Content -LiteralPath $notesFile -Encoding utf8
+          function Digest-Marker([string]$Name, [string]$Hash) { "<!-- desktoprug-asset:${Name}:sha256:$Hash -->" }
+          $markers = ($packages | ForEach-Object { Digest-Marker $_.Name $_.Digest }) -join "`n"
+          "$notes`n`n$sourceMarker`n$markers" | Set-Content -LiteralPath $notesFile -Encoding utf8
           function Read-Release([long]$Id = 0) {
             $endpoint = if ($Id -gt 0) { "$api/releases/$Id" } else { "$api/releases/tags/$tag" }
             try { Invoke-RestMethod $endpoint -Headers $headers -TimeoutSec 15 }
@@ -138,14 +169,18 @@ jobs:
             }
             throw "GitHub release state is not ready after $Phase (6 read attempts). Existing draft/assets were retained; rerun this tag workflow."
           }
-          function Test-AssetReady($candidate, [string]$ExpectedDigest) {
-            $items = @($candidate.assets | Where-Object name -eq $assetName)
+          function Recorded-Digest($candidate, [string]$Name) {
+            $digestMatches = [regex]::Matches([string]$candidate.body, ('<!-- desktoprug-asset:' + [regex]::Escape($Name) + ':sha256:([a-f0-9]{64}) -->'))
+            if ($digestMatches.Count -ne 1) { throw "Release must record exactly one digest for $Name; nothing was overwritten." }
+            return $digestMatches[0].Groups[1].Value
+          }
+          function Test-AssetReady($candidate, [string]$Name, [string]$ExpectedDigest) {
+            $items = @($candidate.assets | Where-Object name -CEQ $Name)
             if ($items.Count -gt 1) { throw 'Duplicate release asset names; refusing replacement.' }
-            $recorded = [regex]::Match([string]$candidate.body, '<!-- desktoprug-asset-sha256:([a-f0-9]{64}) -->').Groups[1].Value
-            if ($recorded -cne $ExpectedDigest) { throw 'Release notes contain a conflicting asset digest; nothing was overwritten.' }
+            if ((Recorded-Digest $candidate $Name) -cne $ExpectedDigest) { throw "Release notes contain a conflicting digest for $Name; nothing was overwritten." }
             if ($items.Count -eq 0) { return $false }
             $actual = [string]$items[0].digest
-            if ($actual -and $actual -cne "sha256:$ExpectedDigest") { throw 'Release asset has a conflicting SHA-256; nothing was overwritten.' }
+            if ($actual -and $actual -cne "sha256:$ExpectedDigest") { throw "Release asset $Name has a conflicting SHA-256; nothing was overwritten." }
             return $items[0].state -eq 'uploaded' -and $items[0].size -gt 0 -and $actual -eq "sha256:$ExpectedDigest"
           }
           $release = Read-Release
@@ -156,34 +191,54 @@ jobs:
             $release = Wait-Release -Phase 'draft creation' -Ready { param($candidate) $true }
           }
           Assert-Source $release
-          $assets = @($release.assets | Where-Object name -eq $assetName)
-          if ($assets.Count -gt 1) { throw 'Duplicate release asset names; refusing replacement.' }
-          $expectedDigest = [regex]::Match([string]$release.body, '<!-- desktoprug-asset-sha256:([a-f0-9]{64}) -->').Groups[1].Value
-          if (!$expectedDigest) { throw 'Release is missing its recorded asset digest; nothing was overwritten.' }
-          if ($assets.Count -eq 0) {
-            if ($release.draft) {
-              gh release edit $tag --repo $env:GITHUB_REPOSITORY --notes-file $notesFile
-              if ($LASTEXITCODE -ne 0) { throw 'Could not update draft artifact digest.' }
-              $release = Wait-Release -Id $release.id -Phase 'draft notes update' -Ready {
-                param($candidate) ([string]$candidate.body).Contains("<!-- desktoprug-asset-sha256:$digest -->")
-              }
-            } elseif ($expectedDigest -cne $digest) {
-              throw 'Published release expects a different build; no asset was replaced.'
-            }
-            $expectedDigest = $digest
-            gh release upload $tag $env:RELEASE_ASSET --repo $env:GITHUB_REPOSITORY
-            if ($LASTEXITCODE -ne 0) { throw 'Asset upload failed; rerun this workflow to resume the draft.' }
+          $expectedDigests = @{}
+          # Reject conflicts in either existing asset before uploading any missing package.
+          foreach ($package in $packages) {
+            $expectedDigests[$package.Name] = Recorded-Digest $release $package.Name
+            $null = Test-AssetReady $release $package.Name $expectedDigests[$package.Name]
           }
-          $release = Wait-Release -Id $release.id -Phase 'asset upload verification' -Ready {
-            param($candidate) Test-AssetReady $candidate $expectedDigest
+          foreach ($package in $packages) {
+            $name = $package.Name
+            $assets = @($release.assets | Where-Object name -CEQ $name)
+            if ($assets.Count -eq 0) {
+              if ($expectedDigests[$name] -cne $package.Digest) {
+                if (!$release.draft) { throw "Published release expects a different build of $name; no asset was replaced." }
+                # Update only the missing asset's marker; preserve every already-uploaded asset digest.
+                $updated = ([string]$release.body).Replace((Digest-Marker $name $expectedDigests[$name]), (Digest-Marker $name $package.Digest))
+                $updated | Set-Content -LiteralPath $notesFile -Encoding utf8
+                gh release edit $tag --repo $env:GITHUB_REPOSITORY --notes-file $notesFile
+                if ($LASTEXITCODE -ne 0) { throw 'Could not update draft artifact digest.' }
+                $release = Wait-Release -Id $release.id -Phase "draft notes update for $name" -Ready {
+                  param($candidate) (Recorded-Digest $candidate $name) -ceq $package.Digest
+                }
+              }
+              $expectedDigests[$name] = $package.Digest
+              gh release upload $tag $package.Path --repo $env:GITHUB_REPOSITORY
+              if ($LASTEXITCODE -ne 0) { throw "Asset upload failed for $name; rerun this workflow to resume the draft." }
+            }
+            $release = Wait-Release -Id $release.id -Phase "asset upload verification for $name" -Ready {
+              param($candidate) Test-AssetReady $candidate $name $expectedDigests[$name]
+            }
+          }
+          function Test-AllAssetsReady($candidate) {
+            $ready = $true
+            foreach ($package in $packages) {
+              if (!(Test-AssetReady $candidate $package.Name $expectedDigests[$package.Name])) { $ready = $false }
+            }
+            return $ready
+          }
+          $release = Wait-Release -Id $release.id -Phase 'both assets verification' -Ready {
+            param($candidate) Test-AllAssetsReady $candidate
           }
           if ($release.draft) {
             gh release edit $tag --repo $env:GITHUB_REPOSITORY --verify-tag --draft=false --prerelease --latest=false
             if ($LASTEXITCODE -ne 0) { throw 'Publishing failed; verified assets remain in the draft.' }
           }
           $release = Wait-Release -Id $release.id -Phase 'publication' -Ready {
-            param($candidate) (Test-AssetReady $candidate $expectedDigest) -and !$candidate.draft -and $candidate.prerelease
+            param($candidate) (Test-AllAssetsReady $candidate) -and !$candidate.draft -and $candidate.prerelease
           }
-          $asset = @($release.assets | Where-Object name -eq $assetName)
           "Published preview: $($release.html_url)" >> $env:GITHUB_STEP_SUMMARY
-          "Download: $($asset[0].browser_download_url)" >> $env:GITHUB_STEP_SUMMARY
+          foreach ($package in $packages) {
+            $asset = @($release.assets | Where-Object name -CEQ $package.Name)
+            "Download $($package.Name): $($asset[0].browser_download_url)" >> $env:GITHUB_STEP_SUMMARY
+          }

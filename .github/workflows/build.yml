@@ -17,7 +17,45 @@ jobs:
       - run: dotnet build DesktopRug.slnx -c Release --no-restore
       - run: dotnet test tests/DesktopRug.Tests/DesktopRug.Tests.csproj -c Release --no-build --no-restore
       - run: dotnet publish src/DesktopRug.App/DesktopRug.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o artifacts/publish/win-x64
+      - name: Compile Windows setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [xml]$project = Get-Content -Raw src/DesktopRug.App/DesktopRug.App.csproj
+          $version = $project.SelectSingleNode('/Project/PropertyGroup/Version').InnerText
+          $compiler = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+          if (!$compiler) {
+            $candidates = @("${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe", "$env:ProgramFiles/Inno Setup 6/ISCC.exe")
+            $compiler = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          }
+          if (!$compiler) { throw 'Inno Setup 6 is missing from this Windows runner image.' }
+          $portable = (Resolve-Path artifacts/publish/win-x64).Path
+          Copy-Item -LiteralPath THIRD-PARTY-NOTICES.md -Destination $portable
+          $destination = (New-Item -ItemType Directory -Path artifacts/installer -Force).FullName
+          & $compiler "/DAppVersion=$version" "/DSourceDir=$portable" "/DOutputDir=$destination" packaging/desktop-rug.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $installer = Join-Path $destination "DesktopRug-$version-Setup-x64.exe"
+          if (!(Test-Path -LiteralPath $installer)) { throw 'Windows setup executable is missing.' }
+          "SETUP_INSTALLER=$installer" >> $env:GITHUB_ENV
+          "SETUP_VERSION=$version" >> $env:GITHUB_ENV
+      - name: Verify install, upgrade and uninstall on disposable runner
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts/test-installer.ps1 -InstallerPath $env:SETUP_INSTALLER -ExpectedVersion $env:SETUP_VERSION
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain installer smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DesktopRug-installer-smoke
+          path: ${{ runner.temp }}/DesktopRug-installer-*/*
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
           name: DesktopRug-win-x64
           path: artifacts/publish/win-x64/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DesktopRug-setup-win-x64
+          path: artifacts/installer/*.exe

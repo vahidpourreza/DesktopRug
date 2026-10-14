@@ -42,8 +42,8 @@ internal sealed class RugController : IDisposable
     private long _lastIcons;
     private long _nextDisplayRetry;
     private bool _displayRefreshPending;
-    private bool _requested = true, _presented, _locked, _suspended, _disposed, _refreshing, _applying, _languageOnlyApplying, _rebuilding;
-    private bool _savingPosition, _saveRequested, _lastPeek, _landingSoundPending;
+    private bool _requested = true, _presented, _locked, _suspended, _disposed, _refreshing, _applying, _livePreferencesApplying, _rebuilding;
+    private bool _savingPosition, _saveRequested, _lastPeek, _landingSoundPending, _cancellingGestures;
     private TaskCompletionSource? _saveCompletion;
     private IconSnapshot? _lastSnapshot;
     private string _iconSignature = "";
@@ -71,6 +71,7 @@ internal sealed class RugController : IDisposable
     internal bool RugRequested => _requested;
     internal bool IsApplying => _applying;
     internal bool IsRolled => _cloth.IsRolled;
+    internal bool HasActiveGesture => _surfaces.Any(surface => surface.Input.IsDragging);
     internal event Action? Changed;
 
     /// <summary>Immutable copies for isolated diagnostics; never changes cloth or window state.</summary>
@@ -120,8 +121,12 @@ internal sealed class RugController : IDisposable
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
             _log.Write("warning", "texture-fallback", ex.GetType().Name);
-            Settings = Settings with { Pattern = RugPattern.Kashan }; _renderer = new(_cloth, Settings);
-            SetDiagnostic("Custom image unavailable. The original image is unchanged; using Kashan.");
+            Settings = Settings with { Pattern = RugPattern.Kashan };
+            // The fallback has its own material dimensions; geometry was initially built
+            // for the unavailable custom image and must match the actual displayed design.
+            ResetGeometry();
+            _renderer = new(_cloth, Settings);
+            SetDiagnostic("Custom image unavailable. The original image is unchanged; using Rich red Persian.");
         }
         CreateSurfaces();
         _audio.Enabled = Settings.Sound; _presented = false; _iconSignature = ""; _lastIcons = 0;
@@ -155,12 +160,17 @@ internal sealed class RugController : IDisposable
     }
     private void ResetGeometry()
     {
-        float widthDip = Math.Min(Settings.Width * Settings.Scale, Math.Min(_display.SizeDip.X * .92f, _display.SizeDip.Y * 1.3f));
+        float aspect = Settings.AspectRatio;
+        float radians = Settings.Rotation * MathF.PI / 180;
+        float cosine = Math.Abs(MathF.Cos(radians)), sine = Math.Abs(MathF.Sin(radians));
+        float maximumWidth = _display.SizeDip.X * .92f / (cosine + sine / aspect);
+        float maximumHeight = _display.SizeDip.Y * .92f / (sine + cosine / aspect);
+        float widthDip = Math.Min(Settings.Width * Settings.Scale, Math.Min(maximumWidth, maximumHeight));
         Vector2 centerScreen = new((float)(_display.Bounds.X + Settings.CenterX * _display.Bounds.Width), (float)(_display.Bounds.Y + Settings.CenterY * _display.Bounds.Height));
         float width = widthDip * (float)_display.DpiScale / _space.PixelScale;
         Vector2 center = _space.ScreenToWorld(centerScreen);
         center = Vector2.Clamp(center, new(width * .1f), _space.Size - new Vector2(width * .1f));
-        _cloth.Reset(center, new(width, width * .7f), Settings.Rotation);
+        _cloth.Reset(center, new(width, width / aspect), Settings.Rotation);
     }
 
     internal void ShowRug() { _requested = true; _peek.Reset(); UpdateVisibility(); Changed?.Invoke(); }
@@ -181,13 +191,20 @@ internal sealed class RugController : IDisposable
         if (active != _lastPeek) { _lastPeek = active; UpdateVisibility(); Changed?.Invoke(); }
         if (!active) _peekTimer.Stop();
     }
-    internal void Flatten() { if (_applying) return; CapturePosition(); ResetGeometry(); Wake(); }
-    internal void RestorePosition() { if (_applying) return; ResetGeometry(); Wake(); }
-    internal void ToggleRoll() { if (_applying) return; _cloth.SetRolled(!_cloth.IsRolled); _audio.Settle(); Wake(); Changed?.Invoke(); }
+    private void CancelGesturesForGeometryChange()
+    {
+        _cancellingGestures = true;
+        try { foreach (var surface in _surfaces) surface.Input.CancelGrab(); }
+        finally { _cancellingGestures = false; }
+    }
+    internal void Flatten() { if (_applying) return; CancelGesturesForGeometryChange(); CapturePosition(); ResetGeometry(); Wake(); }
+    internal void RestorePosition() { if (_applying) return; CancelGesturesForGeometryChange(); ResetGeometry(); Wake(); }
+    internal void ToggleRoll() { if (_applying) return; CancelGesturesForGeometryChange(); _cloth.SetRolled(!_cloth.IsRolled); _audio.Settle(); Wake(); Changed?.Invoke(); }
     internal void Rotate(int degrees)
     {
         if (_applying) return;
-        CapturePosition(); Settings = Settings with { Rotation = (Settings.Rotation + degrees + 360) % 360 };
+        CancelGesturesForGeometryChange();
+        CapturePosition(); Settings = Settings with { Rotation = ((Settings.Rotation + degrees) % 360 + 360) % 360 };
         ResetGeometry(); Wake(); Save(); Changed?.Invoke();
     }
 
@@ -197,20 +214,20 @@ internal sealed class RugController : IDisposable
         if (requested.PeekShortcut is null || !requested.PeekShortcut.TryValidate(out _))
         { SetDiagnostic("Choose a valid Peek shortcut with Ctrl or Alt."); Changed?.Invoke(); return false; }
         var next = requested.Validated();
-        var languageComparison = next with { Language = Settings.Language };
+        var sceneComparison = MergeLivePreferences(next, Settings);
         // The settings monitor selector shows the effective primary display on a first launch,
         // even while the persisted/default monitor identity is still empty.
-        if (Settings.Monitor.Length == 0 && languageComparison.Monitor == _display.DeviceName)
-            languageComparison = languageComparison with { Monitor = Settings.Monitor };
-        // Saving after a language-preview round trip is also a lightweight transaction: an
-        // unchanged language must not flatten the rug or recreate its native surfaces.
-        if (languageComparison == Settings)
-            return await ApplyLanguageAsync(next.Language);
+        if (Settings.Monitor.Length == 0 && sceneComparison.Monitor == _display.DeviceName)
+            sceneComparison = sceneComparison with { Monitor = Settings.Monitor };
+        // Sound, icon bumps, shortcuts, startup and language are live preferences. Changing
+        // them must not flatten cloth or require reopening an already loaded custom image.
+        if (sceneComparison == Settings)
+            return await ApplyLivePreferencesAsync(next);
         if (next.Pattern == RugPattern.Custom && next.CustomTexturePath is null)
         { SetDiagnostic("Choose a local image before selecting Custom."); Changed?.Invoke(); return false; }
         _applying = true; HideAll(); Changed?.Invoke();
         var previous = Settings;
-        bool loginChanged = false, bindingChanged = false;
+        bool loginChanged = false, bindingChanged = false, settingsPersisted = false;
         try
         {
             if (_saveCompletion is { } pendingSave) await pendingSave.Task;
@@ -223,6 +240,11 @@ internal sealed class RugController : IDisposable
             if (next.LaunchAtLogin != previous.LaunchAtLogin)
             { StartupService.SetEnabled(next.LaunchAtLogin); loginChanged = true; }
             await _store.SaveAsync(next);
+            settingsPersisted = true;
+            // Disk I/O may have overlapped a display change; do not clear its notification
+            // while rebuilding from a topology snapshot captured before the await.
+            currentDisplays = _topology.Discover();
+            if (currentDisplays.Count == 0) throw new InvalidOperationException("No interactive display is currently available.");
             _rebuilding = true; HideAll(); DisposeSurfaces(); _renderer.Dispose();
             Displays = currentDisplays; _displayRefreshPending = false;
             Settings = next; _peek.Reset(); _peekErrorKey = null; _peekErrorArguments = []; CreateScene();
@@ -243,7 +265,15 @@ internal sealed class RugController : IDisposable
             if (_rebuilding)
             {
                 DisposeSurfaces(); _renderer.Dispose(); Settings = previous; CreateScene();
-                try { await _store.SaveAsync(previous); }
+                if (Settings.Pattern != previous.Pattern)
+                    SetDiagnostic("The changes could not be applied. The previous custom image is unavailable; using Rich red Persian.");
+            }
+            if (settingsPersisted)
+            {
+                // Recovery can select the catalog fallback when the old custom source has
+                // disappeared. Persist the scene actually recovered, not a stale request.
+                var recoveredSettings = _rebuilding ? Settings : previous;
+                try { await _store.SaveAsync(recoveredSettings); }
                 catch (Exception rollback) { _log.Write("error", "settings-rollback", rollback.GetType().Name); }
             }
             return false;
@@ -251,34 +281,74 @@ internal sealed class RugController : IDisposable
         finally { _rebuilding = false; _applying = false; UpdateVisibility(); Changed?.Invoke(); }
     }
 
-    private async Task<bool> ApplyLanguageAsync(AppLanguage language)
+    private static RugSettings MergeLivePreferences(RugSettings scene, RugSettings preferences) => scene with
     {
-        _applying = true; _languageOnlyApplying = true; Changed?.Invoke();
+        Language = preferences.Language,
+        Sound = preferences.Sound,
+        IconBumps = preferences.IconBumps,
+        Shadow = preferences.Shadow,
+        Lighting = preferences.Lighting,
+        LaunchAtLogin = preferences.LaunchAtLogin,
+        PeekMode = preferences.PeekMode,
+        PeekSeconds = preferences.PeekSeconds,
+        PeekShortcut = preferences.PeekShortcut,
+        PeekOnRightClick = preferences.PeekOnRightClick
+    };
+
+    private async Task<bool> ApplyLivePreferencesAsync(RugSettings requested)
+    {
+        _applying = true; _livePreferencesApplying = true; Changed?.Invoke();
+        var previous = Settings;
         RugSettings? persisted = null;
-        bool saved = false;
+        bool saved = false, bindingChanged = false, loginChanged = false;
         try
         {
             if (_saveCompletion is { } pendingSave) await pendingSave.Task;
-            persisted = Settings with { Language = language };
+            if (requested.PeekShortcut != previous.PeekShortcut)
+            {
+                if (!_peekHotkey.TrySetShortcut(requested.PeekShortcut, out string? error))
+                { SetDiagnostic(_peekHotkey.ErrorKey ?? error!, _peekHotkey.ErrorArguments); return false; }
+                bindingChanged = true;
+            }
+            if (requested.LaunchAtLogin != previous.LaunchAtLogin)
+            { StartupService.SetEnabled(requested.LaunchAtLogin); loginChanged = true; }
+            persisted = MergeLivePreferences(Settings, requested);
             await _store.SaveAsync(persisted);
             // Movement may complete while disk I/O is pending. Preserve its latest coordinates,
             // cloth state, monitor frame, Peek state, and native resources.
-            Settings = Settings with { Language = language };
+            Settings = MergeLivePreferences(Settings, requested);
             saved = true;
+            _audio.Enabled = Settings.Sound;
+            if (previous.Shadow != Settings.Shadow || previous.Lighting != Settings.Lighting)
+            {
+                _renderer.UpdateLighting(Settings);
+                foreach (var surface in _surfaces) surface.Visual.Redraw();
+            }
+            if (previous.IconBumps != Settings.IconBumps) { ApplyBumps(); _cloth.Wake(); }
+            if (bindingChanged || previous.PeekMode != Settings.PeekMode)
+            { _peek.Reset(); _peekTimer.Stop(); _lastPeek = false; }
+            if (bindingChanged) { _peekErrorKey = null; _peekErrorArguments = []; }
             SetDiagnostic("Settings saved.");
             _tray?.RefreshLanguage();
             return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException
+            or System.ComponentModel.Win32Exception or InvalidOperationException or ArgumentException)
         {
-            _log.Write("error", "language-save", ex.GetType().Name);
+            if (bindingChanged) { _peekHotkey.TrySetShortcut(previous.PeekShortcut, out _); CapturePeekError(); }
+            if (loginChanged)
+            {
+                try { StartupService.SetEnabled(previous.LaunchAtLogin); }
+                catch (Exception rollback) { _log.Write("error", "startup-rollback", rollback.GetType().Name); }
+            }
+            _log.Write("error", "live-preferences-save", ex.GetType().Name);
             SetDiagnostic("Changes could not be saved or applied. Previous settings were retained. Check the image and local app-data access.");
             return false;
         }
         finally
         {
-            _languageOnlyApplying = false; _applying = false;
-            // A position save suppressed during the language transaction must not be lost.
+            _livePreferencesApplying = false; _applying = false;
+            // A position save suppressed during the preference transaction must not be lost.
             if (saved && persisted is not null && Settings != persisted) Save();
             UpdateVisibility(); Changed?.Invoke();
         }
@@ -327,7 +397,7 @@ internal sealed class RugController : IDisposable
     private void UpdateVisibility()
     {
         if (_disposed || _rebuilding) return;
-        bool allowed = !_suppressPresentation && (!_applying || _languageOnlyApplying) && !_displayRefreshPending && _requested && !PeekActive && !_locked && !_suspended
+        bool allowed = !_suppressPresentation && (!_applying || _livePreferencesApplying) && !_displayRefreshPending && _requested && !PeekActive && !_locked && !_suspended
             && _emergencyRegistered && _desktop.IsAvailable(_host);
         if (!allowed) { if (_presented) HideAll(); return; }
         RectD rug = ClothScreenBounds();
@@ -363,28 +433,33 @@ internal sealed class RugController : IDisposable
                 surface.Visual.Opacity = 1;
             }
         if (showed && !_desktop.PlaceAboveDesktop(_handles, _host)) { HideAll(); return; }
-        _presented = any || _cloth.IsGrabbed;
-        bool animate = _presented && !_cloth.IsSleeping && (_cloth.IsGrabbed || _surfaces.Any(s => s.Presented && !s.Occluded));
+        bool interacting = _cloth.IsGrabbed || _surfaces.Any(s => s.Input.IsDragging);
+        _presented = any || interacting;
+        bool animate = _presented && (interacting || (!_cloth.IsSleeping && _surfaces.Any(s => s.Presented && !s.Occluded)));
         if (animate && !_frames.IsEnabled) { _lastFrame = _clock.Elapsed.TotalSeconds; _frames.Start(); }
         else if (!animate) _frames.Stop();
     }
     private void Frame(object? sender, EventArgs e)
     {
-        if (!_presented || (_applying && !_languageOnlyApplying)) { _frames.Stop(); return; }
+        if (!_presented || (_applying && !_livePreferencesApplying)) { _frames.Stop(); return; }
         double now = _clock.Elapsed.TotalSeconds;
         foreach (var surface in _surfaces) surface.Input.PollDrag();
-        _cloth.Advance(now - _lastFrame); _lastFrame = now;
+        bool advanced = _cloth.Advance(now - _lastFrame); _lastFrame = now;
         if (now - _lastRegion > 1d / 30)
         {
-            foreach (var surface in _surfaces) surface.Input.UpdateRegion();
+            if (advanced || !_cloth.IsSleeping)
+                foreach (var surface in _surfaces) surface.Input.UpdateRegion();
             _lastRegion = now;
             UpdateVisibility();
         }
-        foreach (var surface in _surfaces) if (surface.Presented && !surface.Occluded) surface.Visual.Redraw();
+        // A stationary pending click still polls release, but a sleeping mesh has no new
+        // pixels to upload. The final settling step is rendered because advanced is true.
+        if (advanced || !_cloth.IsSleeping)
+            foreach (var surface in _surfaces) if (surface.Presented && !surface.Occluded) surface.Visual.Redraw();
         if (_cloth.IsGrabbed && _cloth.MeanMotion > .05f) _audio.Rustle();
         if (_landingSoundPending && !_cloth.IsGrabbed && _cloth.MeanMotion < .08f)
         { _landingSoundPending = false; _audio.Settle(); }
-        if (_cloth.IsSleeping) { _frames.Stop(); CapturePosition(); Save(); }
+        if (_cloth.IsSleeping && !_surfaces.Any(s => s.Input.IsDragging)) { _frames.Stop(); CapturePosition(); Save(); }
     }
     private void Maintain(object? sender, EventArgs e)
     {
@@ -395,7 +470,7 @@ internal sealed class RugController : IDisposable
     private async void RefreshIcons(object? sender, EventArgs e)
     {
         if (_disposed || _refreshing || _applying || !_requested || _locked || _suspended || !Settings.IconBumps) return;
-        bool desktopDrag = !_cloth.IsGrabbed && _desktop.IsDesktopForeground(_host) && (Native.GetAsyncKeyState(1) & 0x8000) != 0;
+        bool desktopDrag = !_cloth.IsGrabbed && _desktop.IsDesktopForeground(_host) && MouseInputSettings.IsPrimaryDown;
         long interval = _iconWatcher.Dragging || desktopDrag ? 50 : _iconWatcher.HasChanges ? 75 : 3000;
         if (Environment.TickCount64 - _lastIcons < interval) return;
         _lastIcons = Environment.TickCount64; _iconWatcher.Acknowledge(); _refreshing = true;
@@ -415,7 +490,7 @@ internal sealed class RugController : IDisposable
         ? snapshot.Icons.Select(i => _space.ScreenToWorld(i.Bounds)) : []);
     private void Released()
     {
-        if (_disposed || _rebuilding) return;
+        if (_disposed || _rebuilding || _cancellingGestures) return;
         _landingSoundPending = true; CapturePosition(); Save(); Wake();
     }
     private void CapturePosition()

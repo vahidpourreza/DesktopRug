@@ -102,7 +102,7 @@ public partial class SettingsWindow : Window
             PeekMode.SelectedValue = mode;
             PeekDuration.ItemsSource = Enumerable.Range(3, 28).Select(value => new { Seconds = value, Label = T("{0} sec", value) }).ToArray();
             PeekDuration.SelectedValue = seconds;
-            ImageName.Text = _customPath is null ? T("Three original procedural designs") : Path.GetFileName(_customPath);
+            UpdateImageName();
             SaveError.Text = _saveError is null ? "" : UiText.IsRtl(_language) ? _saveError.Persian : _saveError.English;
             UpdatePeekHelp(); UpdateStatus();
         }
@@ -129,24 +129,42 @@ public partial class SettingsWindow : Window
     private void PatternChanged(object sender, SelectionChangedEventArgs e) { if (_ready && !_updatingLanguage) RefreshPreview(); }
     private void RefreshPreview()
     {
+        UpdateImageName();
         try
         {
             var bitmap = PatternFactory.Create(_controller.Settings with { Pattern = (RugPattern)Pattern.SelectedValue, CustomTexturePath = _customPath });
             _preview?.Dispose(); _preview = bitmap;
             _previewErrorKey = null;
-            ImageName.Text = _customPath is null ? T("Three original procedural designs") : Path.GetFileName(_customPath);
             Preview.InvalidateVisual();
             UpdateStatus();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
-        { _previewErrorKey = "Choose a readable image to use the custom pattern."; UpdateStatus(); }
+        {
+            _preview?.Dispose(); _preview = null; Preview.InvalidateVisual();
+            _previewErrorKey = "Choose a readable image to use the custom pattern."; UpdateStatus();
+        }
+    }
+    private void UpdateImageName()
+    {
+        bool custom = Pattern.SelectedValue is RugPattern.Custom;
+        ImageName.Text = custom
+            ? _customPath is null ? T("Choose a local image…") : Path.GetFileName(_customPath)
+            : T("Three woven materials from the reference images");
     }
     private void PaintPreview(SKCanvas canvas, int canvasWidth, int canvasHeight)
     {
-        if (_preview is null) return;
-        float height = canvasHeight * .84f, width = height * _preview.Width / _preview.Height;
-        canvas.Translate(canvasWidth / 2f, canvasHeight / 2f); canvas.RotateDegrees(-4);
+        if (_preview is null || canvasWidth <= 0 || canvasHeight <= 0 || _preview.Width <= 0 || _preview.Height <= 0) return;
+        const float rotation = -4;
+        float angle = MathF.Abs(rotation) * MathF.PI / 180;
+        float cos = MathF.Cos(angle), sin = MathF.Sin(angle);
+        // Contain the rotated bitmap on both axes, including portrait materials and wide custom images.
+        float rotatedWidth = _preview.Width * cos + _preview.Height * sin;
+        float rotatedHeight = _preview.Width * sin + _preview.Height * cos;
+        float scale = Math.Min(canvasWidth * .88f / rotatedWidth, canvasHeight * .84f / rotatedHeight);
+        float width = _preview.Width * scale, height = _preview.Height * scale;
+        canvas.Save(); canvas.Translate(canvasWidth / 2f, canvasHeight / 2f); canvas.RotateDegrees(rotation);
         canvas.DrawBitmap(_preview, new SKRect(-width / 2, -height / 2, width / 2, height / 2), new SKSamplingOptions(SKFilterMode.Linear));
+        canvas.Restore();
     }
     private void ChooseImage(object sender, RoutedEventArgs e)
     {

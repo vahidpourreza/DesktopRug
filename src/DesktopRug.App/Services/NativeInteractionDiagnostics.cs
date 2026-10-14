@@ -99,7 +99,7 @@ internal static class NativeInteractionDiagnostics
             // SendMessage enters the actual native WndProc; allowOsCapture:false keeps the user's input untouched.
             Vector2 before = cloth.Center;
             Send(leftInput, left, Native.WmLButtonDown, space.WorldToScreen(before));
-            results["nativeMouseDownStartsGrab"] = cloth.IsGrabbed && leftInput.IsDragging;
+            results["nativeMouseDownPreparesDragWithoutDeforming"] = !cloth.IsGrabbed && leftInput.IsDragging;
             for (int frame = 1; frame <= 14; frame++)
             {
                 Send(leftInput, left, Native.WmMouseMove, space.WorldToScreen(before + new Vector2(frame * 9, 0)));
@@ -153,7 +153,7 @@ internal static class NativeInteractionDiagnostics
             Reset();
             bool nextTouchAccepted = leftInput.HandlePointer(new(55, PointerDevice.Touch, PointerPhase.Down,
                 space.WorldToScreen(cloth.Center), true, false, null));
-            results["secondaryPointerHideClearsGesture"] = barrelPeeks == 1 && nextTouchAccepted && cloth.IsGrabbed;
+            results["secondaryPointerHideClearsGesture"] = barrelPeeks == 1 && nextTouchAccepted && leftInput.IsDragging && !cloth.IsGrabbed;
             leftInput.CancelGrab();
 
             // Original-window messages continue beyond its bounds, like a captured drag crossing monitors.
@@ -199,7 +199,7 @@ internal static class NativeInteractionDiagnostics
         {
             "syntheticDesktopPlacement", "syntheticLayerOrder", "pointerNativeLayout", "scanlineUnionPreservesUncoveredHoles", "invalidHitGeometryFailsClosed", "pointerDoesNotActivate", "mouseDoesNotActivate",
             "initialShapeIncludesRug", "initialShapeExcludesBackground", "occludingWindowRemainsAboveRug", "occlusionDetected", "peekHidesNativeSurfaces",
-            "nativeMouseDownStartsGrab", "nativeMouseDragMovesCenter", "nativeMouseUpEndsGrab", "nativeCornerDragLiftsFabric", "nativeCornerReleaseEndsGrab",
+            "nativeMouseDownPreparesDragWithoutDeforming", "nativeMouseDragMovesCenter", "nativeMouseUpEndsGrab", "nativeCornerDragLiftsFabric", "nativeCornerReleaseEndsGrab",
             "simulatedAdditionalTouchIgnored", "simulatedTouchMovesFabric", "simulatedTouchCancellationEndsGrab", "simulatedPenLiftsFabric", "simulatedPenReleaseEndsGrab",
             "secondaryPointerHideClearsGesture", "originalWindowDragCrossesMonitorBoundary", "secondViewportRegionContainsMovedRug", "mixedDpiRebasePreservesScreenGeometry",
             "secondViewportRegionSurvivesRebase", "allFixtureWindowsStayNonTopmost", "finiteParticlesAfterInteractions", "noFixtureActivated"

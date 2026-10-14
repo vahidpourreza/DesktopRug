@@ -21,6 +21,22 @@ public partial class App : Application
             _log.Write("error", "unhandled-ui", args.Exception.GetType().Name);
             _controller?.HideRug(); args.Handled = true; Shutdown(1);
         };
+        if (e.Args.Contains("--material-diagnostics"))
+        {
+            int index = Array.IndexOf(e.Args, "--material-diagnostics");
+            string output = e.Args.Length > index + 1 ? Path.GetFullPath(e.Args[index + 1]) : Path.Combine(directory, "material-diagnostics");
+            var report = MaterialDiagnostics.Run(output);
+            Shutdown(report.TryGetValue("materialChecksPassed", out var passed) && passed is true ? 0 : 1);
+            return;
+        }
+        if (e.Args.Contains("--interaction-diagnostics"))
+        {
+            int index = Array.IndexOf(e.Args, "--interaction-diagnostics");
+            string output = e.Args.Length > index + 1 ? Path.GetFullPath(e.Args[index + 1]) : Path.Combine(directory, "interaction-diagnostics");
+            var report = await InteractionRegressionDiagnostics.RunAsync(output);
+            Shutdown(report.TryGetValue("interactionRegressionChecksPassed", out var passed) && passed is true ? 0 : 1);
+            return;
+        }
         if (e.Args.Contains("--language-diagnostics"))
         {
             int index = Array.IndexOf(e.Args, "--language-diagnostics");

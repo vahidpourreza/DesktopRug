@@ -80,7 +80,7 @@ public sealed class LanguageTests
         CheckChoices(Enum.GetValues<SimulationQuality>().Select(value => UiText.Quality(AppLanguage.Persian, value)));
         CheckChoices(Enum.GetValues<PeekActivationMode>().Select(value => UiText.PeekMode(AppLanguage.Persian, value)));
         Assert.Equal("Extra large", UiText.Size(AppLanguage.English, RugSize.ExtraLarge));
-        Assert.Equal("کاشان", UiText.Pattern(AppLanguage.Persian, RugPattern.Kashan));
+        Assert.Equal("ایرانی قرمز سیر", UiText.Pattern(AppLanguage.Persian, RugPattern.Kashan));
     }
 
     [Fact]

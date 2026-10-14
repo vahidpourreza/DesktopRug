@@ -9,12 +9,14 @@ namespace DesktopRug.App.Services;
 /// <summary>Measures the awake WPF composition loop, simulation, shaped input and rendering off-screen.</summary>
 internal static class FramePipelineDiagnostics
 {
-    internal static async Task<Dictionary<string, object>> RunAsync()
+    internal static async Task<Dictionary<string, object>> RunAsync(RugPattern pattern = RugPattern.Kashan)
     {
         var display = new DisplayInfo("Offscreen pipeline", new(-28000, -30000, 1000, 760), default, 1, false);
         var cloth = new ClothSimulation { Viewport = display.SizeDip };
-        cloth.Reset(new(500, 380), new(640, 448), -5);
-        using var renderer = new RugRenderer(cloth, new());
+        var settings = new RugSettings { Pattern = pattern };
+        float width = Math.Min(640, 620 * settings.AspectRatio);
+        cloth.Reset(new(500, 380), new(width, width / settings.AspectRatio), -5);
+        using var renderer = new RugRenderer(cloth, settings);
         var visual = new RugOverlayWindow(display, cloth, renderer);
         using var input = new RugInputWindow(display, cloth, allowOsCapture: false);
         using var clock = new RenderClock();
@@ -57,6 +59,9 @@ internal static class FramePipelineDiagnostics
             double[] sorted = intervals.Order().ToArray();
             return new()
             {
+                ["pattern"] = UiText.Pattern(AppLanguage.English, pattern),
+                ["materialWidth"] = width,
+                ["materialHeight"] = width / settings.AspectRatio,
                 ["frames"] = intervals.Count,
                 ["meanFps"] = intervals.Count / duration,
                 ["p95FrameIntervalMs"] = sorted[(int)Math.Floor((sorted.Length - 1) * .95)],

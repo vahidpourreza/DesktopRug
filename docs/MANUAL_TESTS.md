@@ -18,6 +18,8 @@ These are **not executed** unless a dated result is added. They require an inter
 - [ ] Corners lift, wrinkles form and the fabric settles without visible explosions or stuck capture.
 - [ ] Right-click Peek, timer restore, second Peek command, emergency hide during Peek and real desktop double-click activation all work.
 - [ ] Double-click roll and unroll; grab a rolled rug; scroll rotation; tray flatten, restore, four sizes and scale adjustment.
+- [ ] A single click leaves a roll intact; smooth/high-resolution wheel input, multi-notch scrolls and swapped primary mouse buttons behave correctly.
+- [ ] Hide/Peek between clicks does not create an accidental double-click; geometry commands during an active or pending gesture release ownership cleanly.
 - [ ] An application gaining focus stays above the rug; exposed desktop retains it and a covering opaque application pauses animation.
 - [ ] Configure timed, toggle and hold Peek; change its shortcut; test conflict rollback and optional right-click activation.
 - [ ] Touch/pen drag, corner pressure, additional-pointer rejection, cancellation, barrel Peek and promoted-mouse suppression on real devices.
@@ -36,6 +38,8 @@ These are **not executed** unless a dated result is added. They require an inter
 ## Product lifecycle
 
 - [ ] All three patterns and a custom portrait/landscape image; image aspect ratio is preserved and original file remains byte-identical.
+- [ ] Compare red/ivory portrait and neutral landscape materials to the supplied references; verify buried fringe stays hidden in folded/rolled poses.
+- [ ] Language, sound, Peek, icon bumps, startup, shadow and lighting preserve current folds; unrelated preferences remain usable if an already-loaded custom image's source becomes unavailable.
 - [ ] Missing/corrupt custom image gives a useful fallback, never a crash or overwritten image.
 - [ ] Sounds are off initially; optional sounds remain quiet and non-repetitive.
 - [ ] Settings remain readable and keyboard-accessible at small work areas and high DPI.

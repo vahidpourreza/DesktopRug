@@ -1,6 +1,32 @@
-# Validation — 0.3 preview, 2026-10-14
+# Validation — 0.4 preview, 2026-10-14
 
 Status: **implementation gaps addressed; core, native-fixture and off-screen pipeline checks verified; physical release acceptance pending.** See [requirement coverage](REQUIREMENTS.md). Compilation and fixtures alone do not complete the original release definition of done.
+
+## Reference materials and interaction fixes — 0.4
+
+Environment remains Windows 10 build 19045, .NET SDK 10.0.401/runtime 10.0.12, one physical display at 100% DPI. All local application checks are nonactivating/off-screen; the running app, startup registration and personal settings were not modified.
+
+| Check | Result |
+| --- | --- |
+| Locked restore, Release build, portable publish | Passed; zero build warnings/errors |
+| xUnit | 135 passed, zero failed/skipped: 43 new material, cloth and projected-occlusion cases since 0.3 |
+| Source preservation | SHA-256 matches for all three original reference PNGs and their embedded source files |
+| Materials | All three high-resolution textures and flat/fold/roll/unroll renders passed; 18 PNGs pixel-checked, with source/flat/fold/roll samples visually inspected |
+| Fringe occlusion | Exact projected segment/triangle interval tests include buried middles, visible gaps, winding, depth slopes and degenerates; portrait rolls report occluded fringe |
+| Interaction regressions | 36 checks passed: click/drag/roll, stale clicks, wheel deltas, primary-button mapping, shared ownership, live preferences, failed saves, fallback geometry and display fit |
+| Language/settings | Save/cancel, dirty fields, RTL/LTR, narrow layout, persistence and failed-save checks passed |
+| Native integration | Full native-input, region/hit-routing, read-only shell, singleton and raster-reference checks passed |
+| Renderer optimization | All 18 material PNGs remained byte-identical after edge-band occluder filtering |
+| User-session safety | Focus observers reported no diagnostic app activation; no real pointer/input injection or startup change |
+| Setup compilation | Inno Setup 6.7.3 compile-only validation passed; installer execution is deliberately restricted to CI |
+
+With exact fringe clipping, the first off-screen pipeline run measured 45–50 FPS. Rejecting remote triangles once per fringe-edge band restored the same pictures to **59.88 FPS red**, **59.86 FPS ivory**, and **59.90 FPS neutral**, with p95 frame intervals **18.50 / 17.59 / 17.32 ms** respectively. Each measurement includes 90 intervals and 91 WPF paints, simulation and native-region work. These are off-screen results on this machine, not physical presentation or performance guarantees for every size/quality/device.
+
+The portable executable passed `--language-diagnostics`, `--interaction-diagnostics`, `--material-diagnostics`, and `--diagnostics`. The final optimized portable checks are under ignored `artifacts/release-040-final`; earlier packaged evidence is under `artifacts/release-040-check`, and the optimization/pixel-comparison runs are under `artifacts/optimized-fringe-check` and `artifacts/optimized-material-check`. Only generated rug renders are copied into public documentation, never real desktop captures.
+
+Setup is included because the user explicitly requested it, superseding the earlier deferral. Both branch and tag CI compile setup and must pass the guarded `scripts/test-installer.ps1` before uploading/publishing. Its fresh GitHub-hosted Windows checks cover install, same-version reinstall, uninstaller registration, optional launch/shortcut defaults, running-app mutex protection, settings/untracked-file preservation and exact-owned startup cleanup. It is not an older-installer-version migration test; 0.4 is the first setup release. Local installer execution was intentionally skipped. The applicable commit/tag's Actions run is the execution record for this gate.
+
+For local runtime reproduction, use the published executable with each diagnostic flag and its own output directory. For setup compilation without installation, see [RELEASING.md](RELEASING.md). Do not bypass the CI-only installer-test guard on a working desktop.
 
 ## Language update — 0.3
 
@@ -87,4 +113,4 @@ Local evidence stays under ignored artifacts/release-02-check: aggregate JSON, n
 
 Real mouse feel on the visible desktop, real icon activation during Peek, physical touch/pen devices, a real hotkey conflict, Windows 11, Explorer restart, fullscreen/virtual-desktop transitions, multiple physical monitors/live DPI changes, lock/resume, audio quality and opt-in sign-in were not exercised in the user's working session. See [the checklist](MANUAL_TESTS.md).
 
-The implementation now includes persistent desktop layering, shared cross-monitor cloth, configurable Peek, swept contact handling, guided roll/unroll and touch/pen input. Pathological edge–edge tangles remain outside the finite contact solver's guarantee; Explorer controls when drag bounds become available. Installer work remains deferred as the brief specifies. Code signing was not required and is not supplied. The original release acceptance gate stays open until physical checks are recorded.
+The implementation now includes persistent desktop layering, shared cross-monitor cloth, configurable Peek, swept contact handling, guided roll/unroll and touch/pen input. Pathological edge–edge tangles remain outside the finite contact solver's guarantee; Explorer controls when drag bounds become available. The user's subsequent setup request supersedes the original installer deferral; installation checks are scoped separately from physical application acceptance. Code signing was not required and is not supplied. The original release acceptance gate stays open until physical checks are recorded.

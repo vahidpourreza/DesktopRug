@@ -188,11 +188,17 @@ internal static class Diagnostics
             results["renderPerformance"] = performance; results["renderChecksPassed"] = performance["renderChecksPassed"];
             var framePipeline = await FramePipelineDiagnostics.RunAsync();
             results["framePipeline"] = framePipeline; results["framePipelineExecuted"] = framePipeline["pipelineExecuted"];
+            var ivoryPipeline = await FramePipelineDiagnostics.RunAsync(RugPattern.Tabriz);
+            var neutralPipeline = await FramePipelineDiagnostics.RunAsync(RugPattern.Modern);
+            results["materialFramePipelines"] = new[] { framePipeline, ivoryPipeline, neutralPipeline };
+            results["allMaterialPipelinesExecuted"] = framePipeline["pipelineExecuted"] is true
+                && ivoryPipeline["pipelineExecuted"] is true && neutralPipeline["pipelineExecuted"] is true;
             results["foregroundUnchangedDuringCheck"] = Native.GetForegroundWindow() == foreground;
             results["noAppWindowActivated"] = !focusMonitor.AppWasActivated;
             results["manualInteractionVerified"] = false;
             bool passed = new[] { "visualCreated", "inputCreated", "inputShown", "inputLayerAlpha", "inputNonActivating", "visualClickThrough", "visualNonActivating", "wpfRugHasPixels", "wpfOutsideTransparent", "regionApplied", "regionInside", "regionOutsideExcluded", "peekHidesBoth", "clothSettles", "finiteParticles", "rollAnimationCompletes", "unrollAnimationCompletes", "noAppWindowActivated", "settingsUiCreated", "controllerHide", "controllerShow", "controllerPeek", "controllerEndPeek", "controllerSettingsChange", "failedSettingsSavePreservesPreferences", "failedSettingsSaveHasDiagnostic", "nativeInteractionsPassed", "singleInstancePassed", "renderChecksPassed" }.All(key => results[key] is true);
             passed &= results["framePipelineExecuted"] is true;
+            passed &= results["allMaterialPipelinesExecuted"] is true;
             if (results.TryGetValue("desktopZOrder", out var zOrder)) passed &= zOrder is true;
             results["offscreenSmokePassed"] = passed;
             await File.WriteAllTextAsync(Path.Combine(output, "diagnostics.json"), JsonSerializer.Serialize(results, new JsonSerializerOptions { WriteIndented = true }));

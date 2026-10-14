@@ -28,6 +28,7 @@ public sealed class ClothSimulation
     private Vector3 _smoothedTarget;
     private Vector2 _size;
     private Vector2 _rollCenter;
+    private Vector2 _rollBoundaryOffset;
     private float _rotation;
     private float _rollAmount, _rollFrom, _rollTo, _rollElapsed;
     private bool _rollGuided;
@@ -79,7 +80,8 @@ public sealed class ClothSimulation
         if (!float.IsFinite(center.X + center.Y + size.X + size.Y + rotation) || size.X <= 0 || size.Y <= 0)
             throw new ArgumentOutOfRangeException(nameof(size));
         _size = size; _rotation = rotation; _unitScale = 1;
-        _rollGuided = false; _rollAmount = _rollTo = 0; _rollCenter = center;
+        _rollGuided = false; _rollAmount = _rollTo = 0; _rollCenter = center; _rollBoundaryOffset = default;
+        MeanMotion = 0;
         _constraints.Clear(); _grabIndex = -1; _accumulator = 0;
         for (int row = 0; row < Rows; row++)
             for (int col = 0; col < Columns; col++)
@@ -146,6 +148,7 @@ public sealed class ClothSimulation
     public void BeginGrab(int index, Vector2 pointer, float height = 16, float radius = 48)
     {
         if ((uint)index >= Particles.Length) throw new ArgumentOutOfRangeException(nameof(index));
+        if (!float.IsFinite(radius) || radius <= 0) throw new ArgumentOutOfRangeException(nameof(radius));
         // A grabbed roll becomes ordinary cloth in its current curled shape, without a teleport.
         _rollGuided = false; _rollAmount = _rollTo = 0;
         _grabIndex = index;
@@ -204,6 +207,7 @@ public sealed class ClothSimulation
         for (int i = 0; i < _constraints.Count; i++) _constraints[i] = _constraints[i] with { Length = _constraints[i].Length * scale };
         _target = _target * scale + offset; _smoothedTarget = _smoothedTarget * scale + offset;
         _rollCenter = _rollCenter * scale + new Vector2(offset.X, offset.Y);
+        _rollBoundaryOffset *= scale;
         _size *= scale; _unitScale *= scale; MeanMotion *= scale;
         Wake();
     }
@@ -214,7 +218,11 @@ public sealed class ClothSimulation
         float target = rolled ? 1 : 0;
         if ((_rollGuided && _rollTo == target) || (!_rollGuided && !rolled)) return;
         _grabIndex = -1;
-        if (!_rollGuided) { _rollCenter = Center; _rollAmount = 0; }
+        if (!_rollGuided)
+        {
+            _rollCenter = Center; _rollAmount = 0; _rollBoundaryOffset = default;
+            _rollBoundaryOffset = CompactBoundaryCorrection();
+        }
         _rollFrom = _rollAmount; _rollTo = target; _rollElapsed = 0;
         for (int i = 0; i < Particles.Length; i++)
             _rollOffsets[i] = Particles[i].Position - RollPosition(i, _rollAmount);
@@ -267,17 +275,24 @@ public sealed class ClothSimulation
         _contacts.Solve(Particles, Math.Max(_size.X / (Columns - 1), _size.Y / (Rows - 1)), 3 * _unitScale);
         CollideFloor(true);
 
-        float motion = 0;
+        float motion = 0, maximumMotion = 0;
         for (int i = 0; i < Particles.Length; i++)
         {
             ref var p = ref Particles[i];
-            motion += Vector3.DistanceSquared(p.Position, p.Previous);
+            // Contact impulses modify Previous to cancel hidden inward velocity. Sleep must
+            // measure the surface that actually moved, not that solver bookkeeping state.
+            float displacement = Vector3.DistanceSquared(p.Position, p.RenderPrevious);
+            motion += displacement; maximumMotion = Math.Max(maximumMotion, displacement);
         }
         MeanMotion = MathF.Sqrt(motion / Particles.Length);
-        if (_grabIndex < 0 && MeanMotion < .018f * _unitScale) _quietSteps++; else _quietSteps = 0;
+        // RMS alone can hide a still-moving corner in a large mesh. Both bounds must remain
+        // quiet for three quarters of a second; a moving or falling tip keeps the cloth awake.
+        if (_grabIndex < 0 && MeanMotion < .018f * _unitScale && maximumMotion < .08f * .08f * _unitScale * _unitScale)
+            _quietSteps++;
+        else _quietSteps = 0;
         if (_quietSteps > 90)
         {
-            IsSleeping = true;
+            IsSleeping = true; MeanMotion = 0;
             for (int i = 0; i < Particles.Length; i++) Particles[i].Previous = Particles[i].RenderPrevious = Particles[i].Position;
         }
     }
@@ -327,7 +342,7 @@ public sealed class ClothSimulation
         if (t < 1) return;
         if (_rollTo == 1)
         {
-            IsSleeping = true;
+            IsSleeping = true; MeanMotion = 0;
             for (int i = 0; i < Particles.Length; i++) Particles[i].RenderPrevious = Particles[i].Position;
         }
         else { _rollGuided = false; Wake(); }
@@ -358,8 +373,31 @@ public sealed class ClothSimulation
             y = flat - _size.Y * .5f + radius * MathF.Sin(angle);
             z = outerRadius - radius * MathF.Cos(angle);
         }
-        Vector2 xy = _rollCenter + RugGeometry.Rotate(new(x, y), _rotation);
+        Vector2 xy = _rollCenter + RugGeometry.Rotate(new(x, y), _rotation) + _rollBoundaryOffset * amount;
         return new(xy, z + FloorAt(xy));
+    }
+
+    private Vector2 CompactBoundaryCorrection()
+    {
+        float left = float.PositiveInfinity, top = float.PositiveInfinity;
+        float right = float.NegativeInfinity, bottom = float.NegativeInfinity;
+        for (int row = 0; row < Rows; row++)
+            for (int edge = 0; edge < 2; edge++)
+            {
+                // Each row runs straight between its two ends. The margin also covers the
+                // bounded icon height changes after the compact shape moves across the floor.
+                Vector2 point = RugGeometry.Project(RollPosition(row * Columns + edge * (Columns - 1), 1));
+                left = Math.Min(left, point.X); right = Math.Max(right, point.X);
+                top = Math.Min(top, point.Y); bottom = Math.Max(bottom, point.Y);
+            }
+        float margin = Math.Min(12 * _unitScale, Math.Min(Viewport.X, Viewport.Y) * .1f);
+        static float Correction(float low, float high, float extent, float margin)
+        {
+            if (high - low > extent - 2 * margin) return extent * .5f - (low + high) * .5f;
+            if (low < margin) return margin - low;
+            return high > extent - margin ? extent - margin - high : 0;
+        }
+        return new(Correction(left, right, Viewport.X, margin), Correction(top, bottom, Viewport.Y, margin));
     }
 
     private float FloorAt(Vector2 point) => Bumps.HeightAt(point) * _unitScale;

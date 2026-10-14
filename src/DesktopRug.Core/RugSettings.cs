@@ -31,6 +31,16 @@ public sealed record RugSettings
     public bool PeekOnRightClick { get; init; } = true;
 
     [JsonIgnore] public float Width => Size switch { RugSize.Small => 420, RugSize.Large => 840, RugSize.ExtraLarge => 1040, _ => 640 };
+    // Preserve the supplied artwork's physical proportions. Persisted enum names remain
+    // stable for old settings; their display labels and materials can evolve independently.
+    [JsonIgnore]
+    public float AspectRatio => Pattern switch
+    {
+        RugPattern.Kashan => .8f,
+        RugPattern.Tabriz => .7f,
+        RugPattern.Modern => 1.35f,
+        _ => 10f / 7f
+    };
 
     public RugSettings Validated() => this with
     {

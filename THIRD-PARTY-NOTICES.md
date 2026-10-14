@@ -1,6 +1,6 @@
 # Third-party notices
 
-The original application and procedural designs are distinct from these dependencies. Their license notices are retained in `licenses/` and copied beside portable builds.
+The application and supplied rug-reference images are distinct from these dependencies. Dependency license notices are retained in `licenses/` and copied beside portable builds. Rug-source handling is documented in `docs/MATERIALS.md`.
 
 | Component | Version used for this preview | Notice |
 | --- | --- | --- |

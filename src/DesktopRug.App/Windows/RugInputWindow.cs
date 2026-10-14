@@ -1,5 +1,6 @@
 using System.Numerics;
 using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 using DesktopRug.App.Interop;
 using DesktopRug.Core;
 
@@ -15,25 +16,33 @@ internal sealed class RugInputWindow : IDisposable
     private RugCoordinateSpace _space;
     private readonly bool _allowOsCapture;
     private readonly RugHitRegion _hitRegion;
+    private sealed class GestureOwnership { internal RugInputWindow? Owner; }
+    private static readonly ConditionalWeakTable<ClothSimulation, GestureOwnership> GestureOwners = new();
+    private readonly GestureOwnership _gestureOwnership;
     private Vector2 _start, _last;
     private bool _corner;
     private bool _regionValid;
     private bool _ownsGrab;
+    private bool _pendingGrab;
+    private int _pendingIndex;
     private uint? _pointerId;
     private long _lastPointerEvent;
     private long _lastClick;
-    private Vector2 _lastClickPoint;
+    private Vector2 _lastClickScreen;
+    private bool _clickCompleted;
+    private int _wheelRemainder;
     internal event Action? PeekRequested, CompactRequested, Released, Activity;
     internal event Action<int>? RotateRequested;
     internal event Action? DisplayMetricsChanged;
     internal event Action<string>? Faulted;
-    internal bool IsDragging => _ownsGrab && _cloth.IsGrabbed;
+    internal bool IsDragging => _pendingGrab || (_ownsGrab && _cloth.IsGrabbed);
     internal nint Handle { get; private set; }
 
     internal RugInputWindow(DisplayInfo display, ClothSimulation cloth, RugCoordinateSpace? space = null, bool allowOsCapture = true)
     {
         _display = display; _cloth = cloth;
         _space = space ?? new(display.Bounds, (float)display.DpiScale); _allowOsCapture = allowOsCapture;
+        _gestureOwnership = GestureOwners.GetValue(cloth, _ => new());
         _hitRegion = new(cloth);
         _procedure = WindowProcedure;
         var windowClass = new Native.WindowClass
@@ -75,6 +84,7 @@ internal sealed class RugInputWindow : IDisposable
         _space = space;
         _start = space.ScreenToWorld(oldSpace.WorldToScreen(_start));
         _last = space.ScreenToWorld(oldSpace.WorldToScreen(_last));
+        ResetClickSequence();
         UpdateRegion();
     }
 
@@ -87,26 +97,44 @@ internal sealed class RugInputWindow : IDisposable
         // On success Windows owns and eventually deletes the HRGN.
     }
     internal void Show() { if (_regionValid) Native.ShowWindow(Handle, 8); }
-    internal void Hide() { CancelGrab(); Native.ShowWindow(Handle, 0); }
-    internal void CancelGrab()
+    internal void Hide() { CancelGrab(); _wheelRemainder = 0; Native.ShowWindow(Handle, 0); }
+    internal void CancelGrab() => EndGesture(cancelClickSequence: true, releaseCapture: true);
+    private void ResetClickSequence() { _lastClick = 0; _clickCompleted = false; }
+    private void EndGesture(bool cancelClickSequence, bool releaseCapture)
     {
         bool pointerGesture = _pointerId is not null;
         _pointerId = null;
         if (pointerGesture) _lastPointerEvent = Environment.TickCount64;
-        if (!_ownsGrab) return;
-        _ownsGrab = false;
-        _cloth.EndGrab(); if (_allowOsCapture && !pointerGesture) Native.ReleaseCapture(); Released?.Invoke();
+        bool hadGesture = _pendingGrab || _ownsGrab, wasGrabbed = _ownsGrab;
+        _pendingGrab = false; _ownsGrab = false;
+        if (_gestureOwnership.Owner == this) _gestureOwnership.Owner = null;
+        if (cancelClickSequence) ResetClickSequence();
+        if (wasGrabbed) _cloth.EndGrab();
+        if (hadGesture && releaseCapture && _allowOsCapture && !pointerGesture) Native.ReleaseCapture();
+        if (wasGrabbed) Released?.Invoke();
     }
 
     /// <summary>Non-activating windows cannot rely on foreground mouse capture outside their region.</summary>
     internal void PollDrag()
     {
         if (!IsDragging || !_allowOsCapture || _pointerId is not null) return;
-        if ((Native.GetAsyncKeyState(1) & 0x8000) == 0) { CancelGrab(); return; }
+        if (!MouseInputSettings.IsPrimaryDown)
+        {
+            _clickCompleted = _pendingGrab && Native.GetCursorPos(out var released)
+                && WithinDragThreshold(_space.ScreenToWorld(new Vector2(released.X, released.Y)));
+            EndGesture(cancelClickSequence: false, releaseCapture: true); return;
+        }
         if (Native.GetCursorPos(out var screen)) UpdateDrag(_space.ScreenToWorld(new Vector2(screen.X, screen.Y)));
     }
     private void UpdateDrag(Vector2 pointer)
     {
+        if (_pendingGrab)
+        {
+            if (WithinDragThreshold(pointer)) return;
+            _pendingGrab = false; _ownsGrab = true; ResetClickSequence();
+            _cloth.BeginGrab(_pendingIndex, _start, _corner ? 70 : 15, _corner ? 45 : 80);
+            Activity?.Invoke();
+        }
         Vector2 delta = pointer - _last;
         if (delta.LengthSquared() < .001f) return;
         if (!_corner)
@@ -116,6 +144,11 @@ internal sealed class RugInputWindow : IDisposable
         }
         float height = _corner ? Math.Clamp(65 + Vector2.Distance(_start, pointer) * .30f, 65, 200) : 15;
         _cloth.SetGrabTarget(pointer, height); _last = pointer;
+    }
+    private bool WithinDragThreshold(Vector2 pointer)
+    {
+        Vector2 movement = (pointer - _start) * _space.PixelScale;
+        return Math.Abs(movement.X) < MouseInputSettings.DragWidth && Math.Abs(movement.Y) < MouseInputSettings.DragHeight;
     }
 
     private nint WindowProcedure(nint hwnd, uint message, nint wParam, nint lParam)
@@ -130,6 +163,7 @@ internal sealed class RugInputWindow : IDisposable
         {
             // Exceptions must never escape a native callback or leave an invisible blocking window.
             _regionValid = false; Native.ShowWindow(hwnd, 0);
+            try { EndGesture(cancelClickSequence: true, releaseCapture: true); } catch { }
             try { Faulted?.Invoke(exception.GetType().Name); } catch { }
             return Native.DefWindowProc(hwnd, message, wParam, lParam);
         }
@@ -152,39 +186,59 @@ internal sealed class RugInputWindow : IDisposable
         if (message == 0x20) { if (_allowOsCapture) Native.SetCursor(Native.LoadCursor(0, 32649)); handled = true; return 1; } // hand
         if (message == Native.WmCaptureChanged)
         {
-            _pointerId = null;
-            if (_ownsGrab) { _ownsGrab = false; _cloth.EndGrab(); Released?.Invoke(); }
+            // Ignore the notification from our own completed ReleaseCapture; an external
+            // capture transfer cancels an active/pending gesture and its click sequence.
+            if (_pendingGrab || _ownsGrab) EndGesture(cancelClickSequence: true, releaseCapture: false);
             return 0;
         }
         if (message is not (Native.WmLButtonDown or Native.WmLButtonUp or Native.WmMouseMove or Native.WmRButtonUp or Native.WmMouseWheel)) return 0;
         if ((_pointerId is not null || Environment.TickCount64 - _lastPointerEvent < 500) && PointerInput.IsPromotedMouseMessage())
+        { handled = true; return 0; }
+        if (_pointerId is not null && (message is Native.WmLButtonDown or Native.WmLButtonUp or Native.WmMouseMove))
         { handled = true; return 0; }
         var screen = new Native.Point((short)((long)lParam & 0xffff), (short)(((long)lParam >> 16) & 0xffff));
         if (message != Native.WmMouseWheel) Native.ClientToScreen(hwnd, ref screen);
         Vector2 pointer = _space.ScreenToWorld(new Vector2(screen.X, screen.Y));
         if (message == Native.WmLButtonDown)
         {
+            if (_pointerId is not null || (_gestureOwnership.Owner is { } owner && owner != this)) { handled = true; return 0; }
             long now = Environment.TickCount64;
-            if (now - _lastClick < Native.GetDoubleClickTime() && Vector2.Distance(pointer, _lastClickPoint) < 6)
+            Vector2 screenPoint = new(screen.X, screen.Y);
+            Vector2 clickDistance = screenPoint - _lastClickScreen;
+            if (_clickCompleted && now - _lastClick <= Native.GetDoubleClickTime()
+                && Math.Abs(clickDistance.X) <= MouseInputSettings.DoubleClickHalfWidth
+                && Math.Abs(clickDistance.Y) <= MouseInputSettings.DoubleClickHalfHeight)
             { CancelGrab(); CompactRequested?.Invoke(); _lastClick = 0; handled = true; return 0; }
-            _lastClick = now; _lastClickPoint = pointer;
-            BeginDrag(pointer, false);
+            _lastClick = now; _lastClickScreen = screenPoint; _clickCompleted = false;
+            if (!PrepareDrag(pointer, false)) ResetClickSequence();
         }
         else if (message == Native.WmMouseMove && IsDragging)
             UpdateDrag(pointer);
-        else if (message == Native.WmLButtonUp) CancelGrab();
+        else if (message == Native.WmLButtonUp)
+        {
+            if (_pendingGrab) _clickCompleted = WithinDragThreshold(pointer);
+            else if (_ownsGrab) _clickCompleted = false;
+            EndGesture(cancelClickSequence: false, releaseCapture: true);
+        }
         else if (message == Native.WmRButtonUp) { CancelGrab(); PeekRequested?.Invoke(); }
-        else if (message == Native.WmMouseWheel) { CancelGrab(); RotateRequested?.Invoke((short)((long)wParam >> 16) > 0 ? 5 : -5); }
+        else if (message == Native.WmMouseWheel)
+        {
+            int delta = (short)((long)wParam >> 16);
+            if (delta != 0) ResetClickSequence();
+            int total = _wheelRemainder + delta, steps = total / 120;
+            _wheelRemainder = total % 120;
+            if (steps != 0) { CancelGrab(); RotateRequested?.Invoke(steps * 5); }
+        }
         handled = true; return 0;
     }
-    private bool BeginDrag(Vector2 pointer, bool pointerGesture)
+    private bool PrepareDrag(Vector2 pointer, bool pointerGesture)
     {
         int index = _cloth.Pick(pointer);
-        if (index < 0 || (_cloth.IsGrabbed && !_ownsGrab)) return false;
+        if (index < 0 || (_cloth.IsGrabbed && !_ownsGrab) || (_gestureOwnership.Owner is { } owner && owner != this)) return false;
         int c = index % _cloth.Columns, r = index / _cloth.Columns;
         _corner = (c < 4 || c >= _cloth.Columns - 4) && (r < 4 || r >= _cloth.Rows - 4);
-        _start = _last = pointer; _cloth.BeginGrab(index, pointer, _corner ? 70 : 15, _corner ? 45 : 80);
-        _ownsGrab = true;
+        _start = _last = pointer; _pendingIndex = index; _pendingGrab = true;
+        _gestureOwnership.Owner = this;
         if (_allowOsCapture && !pointerGesture) Native.SetCapture(Handle);
         Activity?.Invoke(); return true;
     }
@@ -195,23 +249,23 @@ internal sealed class RugInputWindow : IDisposable
         _lastPointerEvent = Environment.TickCount64;
         if (sample.Phase == PointerPhase.Down)
         {
-            if (_cloth.IsGrabbed) return true;
+            if (_cloth.IsGrabbed || _gestureOwnership.Owner is not null) return true;
             _pointerId = sample.Id;
             if (sample.IsSecondary) { PeekRequested?.Invoke(); return true; }
-            if (!BeginDrag(_space.ScreenToWorld(sample.ScreenPosition), true)) _pointerId = null;
+            if (!PrepareDrag(_space.ScreenToWorld(sample.ScreenPosition), true)) _pointerId = null;
             return _pointerId is not null;
         }
         if (_pointerId != sample.Id) return false;
         if (sample.Phase is PointerPhase.Up or PointerPhase.Canceled)
         {
-            if (_ownsGrab) CancelGrab();
+            if (_ownsGrab || _pendingGrab) EndGesture(cancelClickSequence: sample.Phase == PointerPhase.Canceled, releaseCapture: false);
             _pointerId = null; return true;
         }
         if (IsDragging && sample.InContact)
         {
             Vector2 pointer = _space.ScreenToWorld(sample.ScreenPosition);
             UpdateDrag(pointer);
-            if (_corner && sample.Pressure is { } pressure) _cloth.SetGrabTarget(pointer, 65 + (1 - pressure) * 120);
+            if (_ownsGrab && _corner && sample.Pressure is { } pressure) _cloth.SetGrabTarget(pointer, 65 + (1 - pressure) * 120);
         }
         return true;
     }

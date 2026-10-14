@@ -20,7 +20,7 @@ public static class UiText
     }
 
     public static string Pattern(AppLanguage language, RugPattern value) => Get(language, value switch
-    { RugPattern.Tabriz => "Tabriz", RugPattern.Modern => "Modern", RugPattern.Custom => "Custom", _ => "Kashan" });
+    { RugPattern.Tabriz => "Light ivory Persian", RugPattern.Modern => "Neutral tonal", RugPattern.Custom => "Custom", _ => "Rich red Persian" });
     public static string Size(AppLanguage language, RugSize value) => Get(language, value switch
     { RugSize.Small => "Small", RugSize.Large => "Large", RugSize.ExtraLarge => "Extra large", _ => "Medium" });
     public static string Quality(AppLanguage language, SimulationQuality value) => Get(language, value switch
@@ -89,14 +89,14 @@ public static class UiText
             ["Peek stays active until you press the shortcut again or restore the rug from its tray menu."] = "آیکن‌ها نمایان می‌مانند تا دوباره میان‌بر را فشار دهید یا از منوی کنار ساعت، فرش را برگردانید.",
             ["Hold the keyboard shortcut to Peek; release any key to restore. Tray and right-click Peek use the duration above."] = "میان‌بر را نگه دارید تا آیکن‌ها دیده شوند؛ با رهاکردن یکی از کلیدهای آن، فرش برمی‌گردد. کلیک راست و منوی کنار ساعت از مدت بالا استفاده می‌کنند.",
             ["The rug returns after the selected duration. Press the shortcut again to restore it sooner."] = "فرش پس از مدت انتخاب‌شده برمی‌گردد. برای برگشت زودتر، دوباره میان‌بر را فشار دهید.",
-            ["Three original procedural designs"] = "سه نقش اختصاصیِ ساخته‌شده در برنامه",
+            ["Three woven materials from the reference images"] = "سه بافت فرش از تصاویر مرجع",
             ["Choose a readable image to use the custom pattern."] = "برای نقش دلخواه، تصویری را انتخاب کنید که قابل خواندن باشد.",
             ["Choose a rug image"] = "انتخاب تصویر فرش",
             ["Images"] = "تصویرها",
             ["Images|*.png;*.jpg;*.jpeg;*.webp;*.bmp"] = "تصویرها|*.png;*.jpg;*.jpeg;*.webp;*.bmp",
-            ["Kashan"] = "کاشان",
-            ["Tabriz"] = "تبریز",
-            ["Modern"] = "مدرن",
+            ["Rich red Persian"] = "ایرانی قرمز سیر",
+            ["Light ivory Persian"] = "ایرانی عاجی روشن",
+            ["Neutral tonal"] = "خنثی با طیف ملایم",
             ["Custom"] = "دلخواه",
             ["Small"] = "کوچک",
             ["Medium"] = "متوسط",
@@ -129,7 +129,8 @@ public static class UiText
             ["Peek: {0} ({1})."] = "دیدن آیکن‌ها: {0} ({1}).",
             ["No interactive display is available."] = "هیچ نمایشگری برای کار با برنامه در دسترس نیست.",
             ["No interactive display is currently available."] = "در حال حاضر هیچ نمایشگری برای کار با برنامه در دسترس نیست.",
-            ["Custom image unavailable. The original image is unchanged; using Kashan."] = "تصویر دلخواه در دسترس نیست. تصویر اصلی تغییری نکرده است؛ فعلاً نقش کاشان نمایش داده می‌شود.",
+            ["Custom image unavailable. The original image is unchanged; using Rich red Persian."] = "تصویر دلخواه در دسترس نیست. تصویر اصلی تغییری نکرده است؛ فعلاً فرش ایرانی قرمز سیر نمایش داده می‌شود.",
+            ["The changes could not be applied. The previous custom image is unavailable; using Rich red Persian."] = "تغییرات اعمال نشد. تصویر دلخواه قبلی در دسترس نیست؛ فرش ایرانی قرمز سیر نمایش داده می‌شود.",
             ["The input surface is recovering. Emergency hide and the tray remain available."] = "بخش تعاملی فرش در حال بازیابی است. میان‌بر پنهان‌کردن فوری و منوی کنار ساعت همچنان در دسترس‌اند.",
             ["Choose a valid Peek shortcut with Ctrl or Alt."] = "برای نمایش آیکن‌ها، میان‌بری معتبر با Ctrl یا Alt انتخاب کنید.",
             ["Choose a local image before selecting Custom."] = "پیش از انتخاب نقش دلخواه، تصویری از دستگاه انتخاب کنید.",

@@ -9,7 +9,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Resources/rug.ico</ApplicationIcon>
     <AssemblyName>DesktopRug</AssemblyName>
-    <Version>0.3.1</Version>
+    <Version>0.4.0</Version>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <!-- WPF owns the entry point; its PerMonitorV2 manifest is intentional. WinForms is used only for NotifyIcon. -->
     <NoWarn>$(NoWarn);WFO0003</NoWarn>
@@ -17,6 +17,7 @@
   <ItemGroup>
     <ProjectReference Include="../DesktopRug.Core/DesktopRug.Core.csproj" />
     <PackageReference Include="SkiaSharp" Version="4.153.1" />
+    <EmbeddedResource Include="Resources/Rugs/*.png" LogicalName="DesktopRug.Materials.%(Filename)%(Extension)" />
     <Content Include="../../licenses/*" Link="licenses/%(Filename)%(Extension)" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
   <Target Name="ExcludePublishSymbols" AfterTargets="ComputeFilesToPublish">
