@@ -102,15 +102,17 @@ jobs:
           $notesFile = 'artifacts/release/release-notes.md'
           $notes = Get-Content -Raw -LiteralPath "docs/releases/$env:RELEASE_VERSION.md"
           "$notes`n`n$sourceMarker`n<!-- desktoprug-asset-sha256:$digest -->" | Set-Content -LiteralPath $notesFile -Encoding utf8
-          function Read-Release {
-            try { Invoke-RestMethod "$api/releases/tags/$tag" -Headers $headers }
+          function Read-Release([long]$Id = 0) {
+            $endpoint = if ($Id -gt 0) { "$api/releases/$Id" } else { "$api/releases/tags/$tag" }
+            try { Invoke-RestMethod $endpoint -Headers $headers -TimeoutSec 15 }
             catch {
               if ([int]$_.Exception.Response.StatusCode -ne 404) { throw }
+              if ($Id -gt 0) { return $null }
               # Published-tag lookup may omit drafts; authenticated listing includes them.
               $found = $null
               for ($page = 1; ; $page++) {
                 # Invoke-RestMethod emits JSON arrays as one pipeline object; normalize after assignment.
-                $batch = Invoke-RestMethod "$api/releases?per_page=100&page=$page" -Headers $headers
+                $batch = Invoke-RestMethod "$api/releases?per_page=100&page=$page" -Headers $headers -TimeoutSec 15
                 $batch = @($batch)
                 $matching = @($batch | Where-Object tag_name -CEQ $tag)
                 if ($matching.Count -gt 1 -or ($null -ne $found -and $matching.Count -eq 1)) { throw 'More than one release uses this tag.' }
@@ -120,45 +122,68 @@ jobs:
             }
           }
           function Assert-Source($release) {
-            $commit = Invoke-RestMethod "$api/commits/$tag" -Headers $headers
+            $commit = Invoke-RestMethod "$api/commits/$tag" -Headers $headers -TimeoutSec 15
             if ($commit.sha -cne $env:RELEASE_SOURCE) { throw 'Remote tag moved; refusing release mutation.' }
             if ($release -and ($release.tag_name -cne $tag -or $release.target_commitish -cne $env:RELEASE_SOURCE -or !([string]$release.body).Contains($sourceMarker) -or !$release.prerelease)) {
               throw 'Existing release does not match this source commit and preview workflow.'
             }
+          }
+          function Wait-Release([string]$Phase, [scriptblock]$Ready, [long]$Id = 0) {
+            $delays = @(1, 2, 4, 8, 8)
+            for ($attempt = 0; $attempt -lt 6; $attempt++) {
+              $candidate = Read-Release -Id $Id
+              Assert-Source $candidate
+              if ($null -ne $candidate -and (& $Ready $candidate)) { return $candidate }
+              if ($attempt -lt 5) { Start-Sleep -Seconds $delays[$attempt] }
+            }
+            throw "GitHub release state is not ready after $Phase (6 read attempts). Existing draft/assets were retained; rerun this tag workflow."
+          }
+          function Test-AssetReady($candidate, [string]$ExpectedDigest) {
+            $items = @($candidate.assets | Where-Object name -eq $assetName)
+            if ($items.Count -gt 1) { throw 'Duplicate release asset names; refusing replacement.' }
+            $recorded = [regex]::Match([string]$candidate.body, '<!-- desktoprug-asset-sha256:([a-f0-9]{64}) -->').Groups[1].Value
+            if ($recorded -cne $ExpectedDigest) { throw 'Release notes contain a conflicting asset digest; nothing was overwritten.' }
+            if ($items.Count -eq 0) { return $false }
+            $actual = [string]$items[0].digest
+            if ($actual -and $actual -cne "sha256:$ExpectedDigest") { throw 'Release asset has a conflicting SHA-256; nothing was overwritten.' }
+            return $items[0].state -eq 'uploaded' -and $items[0].size -gt 0 -and $actual -eq "sha256:$ExpectedDigest"
           }
           $release = Read-Release
           Assert-Source $release
           if (!$release) {
             gh release create $tag --repo $env:GITHUB_REPOSITORY --verify-tag --target $env:RELEASE_SOURCE --title "Desktop Rug $tag · Preview" --notes-file $notesFile --draft --prerelease --latest=false
             if ($LASTEXITCODE -ne 0) { throw 'Could not create draft release.' }
-            $release = Read-Release
+            $release = Wait-Release -Phase 'draft creation' -Ready { param($candidate) $true }
           }
           Assert-Source $release
           $assets = @($release.assets | Where-Object name -eq $assetName)
           if ($assets.Count -gt 1) { throw 'Duplicate release asset names; refusing replacement.' }
+          $expectedDigest = [regex]::Match([string]$release.body, '<!-- desktoprug-asset-sha256:([a-f0-9]{64}) -->').Groups[1].Value
+          if (!$expectedDigest) { throw 'Release is missing its recorded asset digest; nothing was overwritten.' }
           if ($assets.Count -eq 0) {
             if ($release.draft) {
               gh release edit $tag --repo $env:GITHUB_REPOSITORY --notes-file $notesFile
               if ($LASTEXITCODE -ne 0) { throw 'Could not update draft artifact digest.' }
-            } elseif (!$release.body.Contains("<!-- desktoprug-asset-sha256:$digest -->")) {
+              $release = Wait-Release -Id $release.id -Phase 'draft notes update' -Ready {
+                param($candidate) ([string]$candidate.body).Contains("<!-- desktoprug-asset-sha256:$digest -->")
+              }
+            } elseif ($expectedDigest -cne $digest) {
               throw 'Published release expects a different build; no asset was replaced.'
             }
+            $expectedDigest = $digest
             gh release upload $tag $env:RELEASE_ASSET --repo $env:GITHUB_REPOSITORY
             if ($LASTEXITCODE -ne 0) { throw 'Asset upload failed; rerun this workflow to resume the draft.' }
           }
-          $release = Read-Release
-          Assert-Source $release
-          $asset = @($release.assets | Where-Object name -eq $assetName)
-          $recordedDigest = [regex]::Match($release.body, '<!-- desktoprug-asset-sha256:([a-f0-9]{64}) -->').Groups[1].Value
-          if ($asset.Count -ne 1 -or $asset[0].state -ne 'uploaded' -or $asset[0].size -le 0 -or !$recordedDigest -or $asset[0].digest -cne "sha256:$recordedDigest") {
-            throw 'Release asset is incomplete or its SHA-256 does not match the recorded build; nothing was overwritten.'
+          $release = Wait-Release -Id $release.id -Phase 'asset upload verification' -Ready {
+            param($candidate) Test-AssetReady $candidate $expectedDigest
           }
           if ($release.draft) {
             gh release edit $tag --repo $env:GITHUB_REPOSITORY --verify-tag --draft=false --prerelease --latest=false
             if ($LASTEXITCODE -ne 0) { throw 'Publishing failed; verified assets remain in the draft.' }
           }
-          $release = Read-Release
-          Assert-Source $release
-          if ($release.draft -or !$release.prerelease) { throw 'Release did not reach published-preview status.' }
+          $release = Wait-Release -Id $release.id -Phase 'publication' -Ready {
+            param($candidate) (Test-AssetReady $candidate $expectedDigest) -and !$candidate.draft -and $candidate.prerelease
+          }
+          $asset = @($release.assets | Where-Object name -eq $assetName)
           "Published preview: $($release.html_url)" >> $env:GITHUB_STEP_SUMMARY
           "Download: $($asset[0].browser_download_url)" >> $env:GITHUB_STEP_SUMMARY
